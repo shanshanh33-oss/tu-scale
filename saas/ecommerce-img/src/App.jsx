@@ -201,7 +201,7 @@ function App() {
           <ZoomIn className="w-5 h-5 text-white" />
         </div>
         <div>
-          <h1 className="text-lg font-bold text-gray-900">图片放大工具</h1>
+          <h1 className="text-lg font-bold text-gray-900">UpScale·图片放大</h1>
           <p className="text-xs text-gray-500">高清放大 · Lanczos 算法 · 支持 4K/8K</p>
         </div>
       </header>
@@ -536,7 +536,7 @@ function App() {
         </div>
       </main>
 
-      <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">图片放大工具 &middot; 基于 Sharp 引擎</footer>
+      <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">UpScale·图片放大工具 &middot; 基于 Sharp 引擎</footer>
 
       {/* 全屏查看 - 单图模式 (可缩放拖动 - 使用 ref 防崩溃) */}
       {showModal && modalMode === 'single' && result && (

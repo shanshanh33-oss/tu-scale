@@ -34,9 +34,9 @@ async function multiPassUpscale(buffer, newW, newH, fitMode, outFmt, quality, en
   let current = buffer;
   let cw = origW, ch = origH;
   for (let i = 0; i < passes; i++) {
-    const remaining = passes - i;
-    const stepW = Math.round(cw * Math.pow(scaleX, 1 / remaining));
-    const stepH = Math.round(ch * Math.pow(scaleY, 1 / remaining));
+    const progress = (i + 1) / passes;
+    const stepW = Math.round(origW * Math.pow(scaleX, progress));
+    const stepH = Math.round(origH * Math.pow(scaleY, progress));
     let pipeline = sharp(current, { limitInputPixels: 0 }).resize(stepW, stepH, {
       kernel: sharp.kernel.lanczos3, withoutEnlargement: false,
       fit: fitMode, background: { r: 255, g: 255, b: 255, alpha: 1 },
