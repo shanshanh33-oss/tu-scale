@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
-import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, Search, X } from 'lucide-react'
+import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon } from 'lucide-react'
 
 const TARGET_PRESETS = [
   { w: 1920, h: 1080, label: 'Full HD', ratio: '16:9' },
@@ -31,7 +31,12 @@ function App() {
   const [error, setError] = useState(null)
   const [dragOver, setDragOver] = useState(false)
   const [showModal, setShowModal] = useState(false)
+  const [compareZoom, setCompareZoom] = useState(1)
   const fileRef = useRef(null)
+  const leftScrollRef = useRef(null)
+  const rightScrollRef = useRef(null)
+  const syncingRef = useRef(false)
+  const [syncedScroll, setSyncedScroll] = useState(true)
 
   // 参数变化时自动清空旧结果
   useEffect(() => {
@@ -398,6 +403,89 @@ function App() {
           {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{error}</div>}
         </div>
 
+        {/* 前后细节对比 */}
+        {result && origDims && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            {/* 头部 */}
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+              <h3 className="font-semibold text-gray-800 text-sm flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-indigo-500" />
+                前后细节对比
+              </h3>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer select-none hover:text-gray-600 transition-colors">
+                  <input type="checkbox" checked={syncedScroll}
+                    onChange={(e) => setSyncedScroll(e.target.checked)}
+                    className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
+                  联动滚动
+                </label>
+                <span className="text-[11px] text-gray-400">同步缩放</span>
+                <input type="range" min="1" max="8" step="0.5" value={compareZoom}
+                  onChange={(e) => setCompareZoom(parseFloat(e.target.value))}
+                  className="w-24 h-1.5" />
+                <span className="text-xs font-mono text-indigo-600 w-10 text-right tabular-nums">{compareZoom}x</span>
+              </div>
+            </div>
+
+            {/* 双栏对比 */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
+              {/* 原图 */}
+              <div className="p-4">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="text-xs font-semibold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">原图</span>
+                  <span className="text-[10px] text-gray-400">{origDims.w}&times;{origDims.h}px</span>
+                </div>
+                <div ref={leftScrollRef}
+                  onScroll={() => {
+                    if (syncingRef.current || !syncedScroll) return;
+                    syncingRef.current = true;
+                    const s = leftScrollRef.current, t = rightScrollRef.current;
+                    if (s && t) {
+                      const pctX = s.scrollWidth > s.clientWidth ? s.scrollLeft / (s.scrollWidth - s.clientWidth) : 0;
+                      const pctY = s.scrollHeight > s.clientHeight ? s.scrollTop / (s.scrollHeight - s.clientHeight) : 0;
+                      if (t.scrollWidth > t.clientWidth) t.scrollLeft = pctX * (t.scrollWidth - t.clientWidth);
+                      if (t.scrollHeight > t.clientHeight) t.scrollTop = pctY * (t.scrollHeight - t.clientHeight);
+                    }
+                    requestAnimationFrame(() => { syncingRef.current = false; });
+                  }}
+                  className="overflow-auto max-h-72 bg-gray-50 rounded-lg border border-gray-100 cursor-pointer hover:border-indigo-200 transition-colors"
+                  onClick={() => setShowModal(true)}>
+                  <img src={preview} alt="原图"
+                    style={{ transform: `scale(${compareZoom})`, transformOrigin: 'top left', minWidth: '100%' }}
+                    className="block" />
+                </div>
+              </div>
+
+              {/* 放大后 */}
+              <div className="p-4">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">放大后</span>
+                  <span className="text-[10px] text-gray-400">{resultDims.w}&times;{resultDims.h}px</span>
+                </div>
+                <div ref={rightScrollRef}
+                  onScroll={() => {
+                    if (syncingRef.current || !syncedScroll) return;
+                    syncingRef.current = true;
+                    const s = rightScrollRef.current, t = leftScrollRef.current;
+                    if (s && t) {
+                      const pctX = s.scrollWidth > s.clientWidth ? s.scrollLeft / (s.scrollWidth - s.clientWidth) : 0;
+                      const pctY = s.scrollHeight > s.clientHeight ? s.scrollTop / (s.scrollHeight - s.clientHeight) : 0;
+                      if (t.scrollWidth > t.clientWidth) t.scrollLeft = pctX * (t.scrollWidth - t.clientWidth);
+                      if (t.scrollHeight > t.clientHeight) t.scrollTop = pctY * (t.scrollHeight - t.clientHeight);
+                    }
+                    requestAnimationFrame(() => { syncingRef.current = false; });
+                  }}
+                  className="overflow-auto max-h-72 bg-gray-50 rounded-lg border border-gray-100 cursor-pointer hover:border-indigo-200 transition-colors"
+                  onClick={() => setShowModal(true)}>
+                  <img src={result} alt="放大后"
+                    style={{ transform: `scale(${compareZoom})`, transformOrigin: 'top left', minWidth: '100%' }}
+                    className="block" />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 结果区 */}
         {result && (
           <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
@@ -414,16 +502,10 @@ function App() {
                 onClick={() => setShowModal(true)} />
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setShowModal(true)}
-                className="py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl text-sm font-medium flex items-center justify-center gap-2">
-                <Search className="w-4 h-4" /> 查看细节
-              </button>
-              <button onClick={handleDownload}
-                className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2">
-                <Download className="w-4 h-4" /> 下载
-              </button>
-            </div>
+            <button onClick={handleDownload}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
+              <Download className="w-4 h-4" /> 下载
+            </button>
           </div>
         )}
 
@@ -440,19 +522,34 @@ function App() {
 
       <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">图片放大工具 &middot; 基于 Sharp 引擎</footer>
 
-      {/* 全屏查看 */}
+      {/* 全屏查看 - 前后对比 */}
       {showModal && result && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center" onClick={() => setShowModal(false)}>
-          <div className="relative">
-            <img src={result} alt="放大结果" className="max-w-[95vw] max-h-[90vh] object-contain" />
+        <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center" onClick={() => setShowModal(false)}>
+          <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 p-4 sm:p-8 max-w-[98vw] max-h-[95vh] overflow-auto items-start">
+            {/* 原图 */}
+            <div className="bg-black/40 rounded-xl p-3 flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-semibold text-white/60 bg-white/10 px-2 py-0.5 rounded">原图</span>
+                <span className="text-[10px] text-white/40">{origDims.w}&times;{origDims.h}px</span>
+              </div>
+              <img src={preview} alt="原图" className="max-w-full max-h-[70vh] object-contain rounded-lg" />
+            </div>
+            {/* 放大后 */}
+            <div className="bg-black/40 rounded-xl p-3 flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-semibold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded">放大后</span>
+                <span className="text-[10px] text-white/40">{resultDims.w}&times;{resultDims.h}px</span>
+              </div>
+              <img src={result} alt="放大后" className="max-w-full max-h-[70vh] object-contain rounded-lg" />
+            </div>
           </div>
           <div className="absolute top-4 right-4">
             <button onClick={() => setShowModal(false)}
-              className="w-8 h-8 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-lg flex items-center justify-center text-white">
+              className="w-8 h-8 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-lg flex items-center justify-center text-white transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
-          <div className="absolute bottom-4 text-white/50 text-xs">点击任意位置关闭</div>
+          <div className="absolute bottom-4 text-white/30 text-xs">点击空白区域关闭</div>
         </div>
       )}
     </div>
