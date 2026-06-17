@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
-import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon } from 'lucide-react'
+ import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon } from 'lucide-react'
 
 const TARGET_PRESETS = [
   { w: 1920, h: 1080, label: 'Full HD', ratio: '16:9' },
@@ -192,25 +192,26 @@ function App() {
     const name = file ? file.name.replace(/\.[^.]+$/, '') : 'image'
     a.download = `${name}_${resultDims ? resultDims.w + 'x' + resultDims.h : 'upscaled'}.${ext}`
     a.href = result; a.click()
-  }
+   }
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-3 sticky top-0 z-10">
-        <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center">
-          <ZoomIn className="w-5 h-5 text-white" />
-        </div>
-        <div>
-          <h1 className="text-lg font-bold text-gray-900">UpScale·图片放大</h1>
-          <p className="text-xs text-gray-500">高清放大 · Lanczos 算法 · 支持 4K/8K</p>
-        </div>
-      </header>
+   return (
+     <div className="min-h-screen bg-gray-50/80">
+       <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 flex items-center gap-2.5 sticky top-0 z-10 shadow-sm">
+           <img src="/logo.png" alt="UpScale" className="w-8 h-8 shrink-0" />
+         <div className="flex flex-col min-w-0">
+           <div className="flex items-center gap-2">
+             <h1 className="text-base font-bold tracking-tight" style={{ color: '#8040f0' }}>UpScale</h1>
+             <span className="text-[11px] hidden sm:block truncate leading-none" style={{ color: '#7c3aed' }}>图片放大工具</span>
+           </div>
+           <span className="text-[10px] text-gray-400 leading-none">高清放大•Lanczos 算法•支持 4K/8K</span>
+         </div>
+       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
         {/* 上传区 */}
         <section
-          className={`bg-white rounded-xl border-2 border-dashed p-8 text-center cursor-pointer transition-all ${
-            dragOver ? 'border-indigo-500 bg-indigo-50/60' : 'border-gray-200 hover:border-indigo-300'
+          className={`bg-white rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-all ${
+            dragOver ? 'border-indigo-500 bg-indigo-50/60' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50/50'
           }`}
           onClick={() => fileRef.current?.click()}
           onDrop={handleDrop}
@@ -220,21 +221,23 @@ function App() {
           <input ref={fileRef} type="file" accept="image/*" className="hidden"
             onChange={(e) => handleFile(e.target.files[0])} />
           {preview ? (
-            <div className="space-y-3">
-              <img src={preview} alt="原图" className="max-h-48 mx-auto rounded-lg object-contain shadow-sm" />
+            <div className="space-y-4">
+              <div className="bg-gray-50 rounded-xl p-3 inline-block mx-auto">
+                <img src={preview} alt="原图" className="max-h-48 mx-auto rounded-lg object-contain shadow-sm" />
+              </div>
               <div className="text-sm text-gray-500">
                 <p>{origDims.w}&times;{origDims.h}px &middot; {(file.size / 1024).toFixed(1)} KB</p>
                 <p className="text-xs text-gray-400 truncate max-w-md mx-auto">{file.name}</p>
               </div>
-              <button onClick={handleRemove} className="text-xs text-red-500 hover:text-red-700 underline">删除重选</button>
+              <button onClick={handleRemove} className="text-xs text-red-500 hover:text-red-700 underline underline-offset-2">删除重选</button>
             </div>
           ) : (
-            <div className="text-gray-400">
-              <div className="w-14 h-14 mx-auto mb-3 rounded-xl bg-gray-100 flex items-center justify-center">
-                <Upload className="w-7 h-7 text-gray-400" />
+            <div className="text-gray-400 py-4">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 flex items-center justify-center border border-indigo-100/50">
+                <Upload className="w-8 h-8 text-indigo-400" />
               </div>
               <p className="text-sm font-medium text-gray-600">点击或拖拽上传图片</p>
-              <p className="text-xs mt-1 text-gray-400">支持 JPG / PNG / WebP</p>
+              <p className="text-xs mt-1 text-gray-400">支持 JPG · PNG · WebP</p>
             </div>
           )}
         </section>
