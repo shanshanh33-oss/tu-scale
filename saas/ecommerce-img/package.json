@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "vercel-build": "npm rebuild sharp && npm run build"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.1",
@@ -16,7 +17,7 @@
     "react-dom": "^19.2.6",
     "sharp": "^0.35.1",
     "tailwindcss": "^4.3.1",
-    "vercel": "^54.14.0"
+    "vercel": "^54.14.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
