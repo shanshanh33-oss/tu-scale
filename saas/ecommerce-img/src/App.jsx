@@ -41,6 +41,10 @@ function App() {
   const [statsData, setStatsData] = useState(null)
   const [statsLoading, setStatsLoading] = useState(false)
   const [statsError, setStatsError] = useState(null)
+  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false)
+  const [passwordInput, setPasswordInput] = useState("")
+  const [passwordError, setPasswordError] = useState(false)
+
 
   const panStart = useRef({ x: 0, y: 0 })
   const panOrigin = useRef({ x: 0, y: 0 })
@@ -676,7 +680,7 @@ function App() {
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
               <Download className="w-4 h-4" /> 下载
             </button>
-            <button onClick={() => { setShowStats(true); fetchStats(); }}
+            <button onClick={() => { setShowPasswordPrompt(true); setPasswordInput(""); setPasswordError(false); }}
               className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
               <BarChart3 className="w-4 h-4" /> 查看统计数据
             </button>
@@ -694,6 +698,33 @@ function App() {
         </div>
       </main>
 
+
+
+      {/* 密码验证 */}
+      {showPasswordPrompt && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          onClick={() => { setShowPasswordPrompt(false); setPasswordError(false); }}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6"
+            onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-gray-800 mb-4 text-center">验证身份</h3>
+            <p className="text-xs text-gray-500 mb-4 text-center">请输入管理员密码查看统计数据</p>
+            <input type="password" value={passwordInput}
+              onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && passwordInput === "upscale123") {
+                setShowPasswordPrompt(false); setShowStats(true); fetchStats(); } }}
+              placeholder="输入密码"
+              className="w-full px-4 py-2.5 rounded-xl border text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none mb-3"
+              autoFocus />
+            {passwordError && <p className="text-xs text-red-500 mb-3 text-center">密码错误</p>}
+            <button onClick={() => {
+              if (passwordInput === "upscale123") {
+                setShowPasswordPrompt(false); setShowStats(true); fetchStats();
+              } else { setPasswordError(true); }
+            }}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold">确认</button>
+          </div>
+        </div>
+      )}
 
       {/* 统计面板 */}
       {showStats && (
