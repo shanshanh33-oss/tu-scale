@@ -131,59 +131,162 @@ function App() {
     ? Math.min(20, Math.floor(Math.min(10000 / origDims.w, 10000 / origDims.h) * 2) / 2)
     : 20
 
-  const handleProcess = async () => {
-    if (!preview) return
-    setProcessing(true)
-    setProgress(0)
-    setError(null)
-    setResult(null)
 
-    let p = 0
+
+
+
+  const handleProcess = useCallback(async () => {
+    if (!preview || !origDims) return;
+    setProcessing(true);
+    setProgress(0);
+    setError(null);
+    setResult(null);
+
+    let p = 0;
     const tick = () => {
-      if (p < 20) p += 4
-      else if (p < 50) p += 2
-      else if (p < 80) p += 1
-      setProgress(Math.min(p, 90))
-    }
-    const timer = setInterval(tick, 300)
+      if (p < 30) p += 5;
+      else if (p < 70) p += 3;
+      else if (p < 90) p += 1;
+      setProgress(Math.min(p, 91));
+    };
+    const timer = setInterval(tick, 200);
 
     try {
-      const base64 = preview.split(',')[1]
-      const body = {
-        image: base64, format,
-        mode: upscaleMode, enhance,
-        fit: keepRatio ? 'inside' : 'fill',
-        scale: upscaleMode === 'scale' ? scale : undefined,
-        targetWidth: targetDims?.w, targetHeight: targetDims?.h,
+      // Calculate target dimensions
+      let targetW, targetH;
+      if (upscaleMode === 'scale') {
+        targetW = Math.round(origDims.w * scale);
+        targetH = Math.round(origDims.h * scale);
+        const maxDim = 10000;
+        if (targetW > maxDim || targetH > maxDim) {
+          const r = Math.min(maxDim / targetW, maxDim / targetH);
+          targetW = Math.round(targetW * r);
+          targetH = Math.round(targetH * r);
+        }
+      } else if (targetDims) {
+        if (keepRatio) {
+          const r = Math.min(targetDims.w / origDims.w, targetDims.h / origDims.h);
+          targetW = Math.round(origDims.w * r);
+          targetH = Math.round(origDims.h * r);
+        } else {
+          targetW = targetDims.w;
+          targetH = targetDims.h;
+        }
       }
-      const res = await fetch('/api/upscale', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      if (format === 'jpeg') { targetW += targetW & 1; targetH += targetH & 1; }
 
-      setProgress(95)
-      await new Promise(r => setTimeout(r, 200))
+      setProgress(20);
 
-      setResult('data:image/' + data.format + ';base64,' + data.image)
-      setResultDims({ w: data.width, h: data.height })
-      const rawLen = data.image.length * 0.75
-      setResultSize(
-        rawLen < 1024 * 1024
-          ? (rawLen / 1024).toFixed(1) + ' KB'
-          : (rawLen / (1024 * 1024)).toFixed(1) + ' MB'
-      )
-      setProgress(100)
+      // Process using Canvas
+      const result = await processImageWithCanvas(preview, targetW, targetH, enhance);
+
+      setProgress(95);
+      await new Promise(r => setTimeout(r, 100));
+
+      setResult(result.dataUrl);
+      setResultDims({ w: result.width, h: result.height });
+      const sizeKB = result.size < 1024 * 1024
+        ? (result.size / 1024).toFixed(1) + ' KB'
+        : (result.size / (1024 * 1024)).toFixed(1) + ' MB';
+      setResultSize(sizeKB);
+      setProgress(100);
     } catch (err) {
-      setError(err.message)
-      setProgress(0)
+      setError(err.message);
+      setProgress(0);
     } finally {
-      clearInterval(timer)
-      setProcessing(false)
+      clearInterval(timer);
+      setProcessing(false);
     }
-  }
+  }, [preview, origDims, upscaleMode, scale, targetDims, keepRatio, format, enhance]);
+
+  // Client-side image processing using Canvas
+  const processImageWithCanvas = (imageUrl, targetW, targetH, doEnhance) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          // Multi-pass upscaling for large enlargements
+          const avgScale = Math.max(targetW / img.width, targetH / img.height);
+          const passes = avgScale >= 8 ? 3 : avgScale >= 4 ? 2 : avgScale >= 2.5 ? 2 : 1;
+
+          let srcCanvas = document.createElement('canvas');
+          srcCanvas.width = img.width;
+          srcCanvas.height = img.height;
+          let srcCtx = srcCanvas.getContext('2d');
+          srcCtx.drawImage(img, 0, 0);
+
+          for (let i = 0; i < passes; i++) {
+            const progress = (i + 1) / passes;
+            const stepW = Math.round(img.width * Math.pow(targetW / img.width, progress));
+            const stepH = Math.round(img.height * Math.pow(targetH / img.height, progress));
+
+            const dstCanvas = document.createElement('canvas');
+            dstCanvas.width = stepW;
+            dstCanvas.height = stepH;
+            const dstCtx = dstCanvas.getContext('2d');
+
+            // Draw at new size (browser handles interpolation)
+            dstCtx.drawImage(srcCanvas, 0, 0, stepW, stepH);
+
+            // Apply sharpening at each step if enhanced
+            if (doEnhance || i > 0) {
+              const imageData = dstCtx.getImageData(0, 0, stepW, stepH);
+              const sharpened = sharpenImageData(imageData, doEnhance ? 0.5 : 0.3);
+              dstCtx.putImageData(sharpened, 0, 0);
+            }
+
+            srcCanvas = dstCanvas;
+          }
+
+          // Export to desired format
+          const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+          const quality = format === 'png' ? undefined : 0.92;
+          const dataUrl = srcCanvas.toDataURL(mimeType, quality);
+          const sizeBytes = dataUrl.length * 0.75; // approximate from base64
+
+          resolve({
+            dataUrl,
+            width: srcCanvas.width,
+            height: srcCanvas.height,
+            size: sizeBytes
+          });
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = imageUrl;
+    });
+  };
+
+  // Simple sharpen convolution filter
+  const sharpenImageData = (imageData, strength = 0.5) => {
+    const { data, width, height } = imageData;
+    const output = new Uint8ClampedArray(data);
+    const kernel = [
+      0, -strength, 0,
+      -strength, 1 + 4 * strength, -strength,
+      0, -strength, 0
+    ];
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = (y * width + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          let sum = 0;
+          for (let ky = -1; ky <= 1; ky++) {
+            for (let kx = -1; kx <= 1; kx++) {
+              const pixelIdx = ((y + ky) * width + (x + kx)) * 4 + c;
+              const k = kernel[(ky + 1) * 3 + (kx + 1)];
+              sum += data[pixelIdx] * k;
+            }
+          }
+          output[idx + c] = Math.max(0, Math.min(255, sum));
+        }
+      }
+    }
+    return new ImageData(output, width, height);
+  };
 
   const handleDownload = () => {
     if (!result) return
