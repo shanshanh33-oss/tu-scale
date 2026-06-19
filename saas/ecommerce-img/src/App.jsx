@@ -1,6 +1,6 @@
  import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
  import { track } from '@vercel/analytics'
- import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, BarChart3 } from 'lucide-react'
+ import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon } from 'lucide-react'
 
 const TARGET_PRESETS = [
   { w: 1920, h: 1080, label: 'Full HD', ratio: '16:9' },
@@ -37,15 +37,6 @@ function App() {
   const [imgZoom, setImgZoom] = useState(1)
   const [imgPan, setImgPan] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
-  const [showStats, setShowStats] = useState(false)
-  const [statsData, setStatsData] = useState(null)
-  const [statsLoading, setStatsLoading] = useState(false)
-  const [statsError, setStatsError] = useState(null)
-  const [showPasswordPrompt, setShowPasswordPrompt] = useState(false)
-  const [passwordInput, setPasswordInput] = useState("")
-  const [passwordError, setPasswordError] = useState(false)
-
-
   const panStart = useRef({ x: 0, y: 0 })
   const panOrigin = useRef({ x: 0, y: 0 })
   const fileRef = useRef(null)
@@ -153,8 +144,6 @@ function App() {
       format,
       enhance: enhance ? 'yes' : 'no'
     });
-    recordUpscale();
-
     if (!preview || !origDims) return;
     setProcessing(true);
     setProgress(0);
@@ -316,29 +305,6 @@ function App() {
     }
     return new ImageData(output, width, height);
   };
-
-  const recordUpscale = useCallback(async () => {
-    try {
-      await fetch("/api/stats", { method: "POST" });
-    } catch (e) {
-      console.warn("Stats record failed", e);
-    }
-  }, []);
-
-  const fetchStats = useCallback(async () => {
-    setStatsLoading(true);
-    setStatsError(null);
-    try {
-      const res = await fetch("/api/stats");
-      if (!res.ok) throw new Error("Failed to fetch stats");
-      const data = await res.json();
-      setStatsData(data);
-    } catch (e) {
-      setStatsError(e.message);
-    } finally {
-      setStatsLoading(false);
-    }
-  }, []);
 
   const handleDownload = () => {
     if (!result) return
@@ -680,10 +646,6 @@ function App() {
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
               <Download className="w-4 h-4" /> 下载
             </button>
-            <button onClick={() => { setShowPasswordPrompt(true); setPasswordInput(""); setPasswordError(false); }}
-              className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
-              <BarChart3 className="w-4 h-4" /> 查看统计数据
-            </button>
           </div>
         )}
 
@@ -697,87 +659,6 @@ function App() {
           </ul>
         </div>
       </main>
-
-
-
-      {/* 密码验证 */}
-      {showPasswordPrompt && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-          onClick={() => { setShowPasswordPrompt(false); setPasswordError(false); }}>
-          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6"
-            onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-base font-bold text-gray-800 mb-4 text-center">验证身份</h3>
-            <p className="text-xs text-gray-500 mb-4 text-center">请输入管理员密码查看统计数据</p>
-            <input type="password" value={passwordInput}
-              onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
-              onKeyDown={(e) => { if (e.key === "Enter" && passwordInput === "upscale123") {
-                setShowPasswordPrompt(false); setShowStats(true); fetchStats(); } }}
-              placeholder="输入密码"
-              className="w-full px-4 py-2.5 rounded-xl border text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none mb-3"
-              autoFocus />
-            {passwordError && <p className="text-xs text-red-500 mb-3 text-center">密码错误</p>}
-            <button onClick={() => {
-              if (passwordInput === "upscale123") {
-                setShowPasswordPrompt(false); setShowStats(true); fetchStats();
-              } else { setPasswordError(true); }
-            }}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold">确认</button>
-          </div>
-        </div>
-      )}
-
-      {/* 统计面板 */}
-      {showStats && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setShowStats(false)}>
-          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-indigo-500" />
-                使用统计
-              </h3>
-              <button onClick={() => setShowStats(false)} className="text-gray-400 hover:text-gray-600">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
-            </div>
-            {statsLoading ? (
-              <div className="text-center py-8 text-sm text-gray-400">加载中...</div>
-            ) : statsError ? (
-              <div className="text-center py-8">
-                <p className="text-sm text-red-500 mb-2">统计数据暂时不可用</p>
-                <p className="text-xs text-gray-400">刷新后重试</p>
-              </div>
-            ) : statsData ? (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-indigo-50 rounded-xl p-4 text-center">
-                    <div className="text-2xl font-bold text-indigo-600">{statsData.totalCount || 0}</div>
-                    <div className="text-xs text-gray-500 mt-1">累计生成</div>
-                  </div>
-                  <div className="bg-purple-50 rounded-xl p-4 text-center">
-                    <div className="text-2xl font-bold text-purple-600">{statsData.todayCount || 0}</div>
-                    <div className="text-xs text-gray-500 mt-1">今日生成</div>
-                  </div>
-                </div>
-                {statsData.lastTimestamp && (
-                  <div className="text-xs text-gray-400 text-center">
-                    最近使用：{new Date(statsData.lastTimestamp).toLocaleString("zh-CN")}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <button onClick={fetchStats} className="text-sm text-indigo-600 underline">点击加载</button>
-              </div>
-            )}
-            <div className="mt-4 pt-3 border-t border-gray-100 text-center">
-              <a href="https://vercel.com/shanshanh33-2667s-projects/upscale/analytics" target="_blank"
-                className="text-xs text-indigo-400 hover:text-indigo-600">在 Vercel 查看完整分析 &rarr;</a>
-            </div>
-          </div>
-        </div>
-      )}
 
       <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">UpScale·图片放大工具 &middot; 基于 Sharp 引擎</footer>
 
