@@ -1,5 +1,6 @@
-import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
- import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon } from 'lucide-react'
+ import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
+ import { track } from '@vercel/analytics'
+ import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, BarChart3 } from 'lucide-react'
 
 const TARGET_PRESETS = [
   { w: 1920, h: 1080, label: 'Full HD', ratio: '16:9' },
@@ -136,6 +137,13 @@ function App() {
 
 
   const handleProcess = useCallback(async () => {
+    const startTime = Date.now();
+    track('upscale_start', {
+      mode: upscaleMode,
+      scale: upscaleMode === 'scale' ? scale : undefined,
+      format,
+      enhance: enhance ? 'yes' : 'no'
+    });
     if (!preview || !origDims) return;
     setProcessing(true);
     setProgress(0);
@@ -185,6 +193,15 @@ function App() {
 
       setResult(result.dataUrl);
       setResultDims({ w: result.width, h: result.height });
+      track('upscale_success', {
+        inputW: origDims.w,
+        inputH: origDims.h,
+        outputW: result.width,
+        outputH: result.height,
+        duration: Math.round((Date.now() - startTime) / 1000) + 's',
+        mode: upscaleMode,
+        format
+      });
       const sizeKB = result.size < 1024 * 1024
         ? (result.size / 1024).toFixed(1) + ' KB'
         : (result.size / (1024 * 1024)).toFixed(1) + ' MB';
@@ -192,6 +209,7 @@ function App() {
       setProgress(100);
     } catch (err) {
       setError(err.message);
+      track('upscale_error', { error: err.message, duration: Math.round((Date.now() - startTime) / 1000) + 's' });
       setProgress(0);
     } finally {
       clearInterval(timer);
@@ -624,9 +642,13 @@ function App() {
                 onClick={() => { setModalMode('single'); setShowModal(true); setImgZoom(1); setImgPan({x:0,y:0}); }} />
             </div>
 
-            <button onClick={handleDownload}
+      <button onClick={handleDownload}
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
               <Download className="w-4 h-4" /> 下载
+            </button>
+            <button onClick={() => window.open('https://vercel.com/shanshanh33-2667s-projects/upscale/analytics', '_blank')}
+              className="w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
+              <BarChart3 className="w-4 h-4" /> 查看统计数据
             </button>
           </div>
         )}
