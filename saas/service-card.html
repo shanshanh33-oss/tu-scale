@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>闲鱼服务展示卡生成器</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; color: #111; min-height: 100vh; }
+header { background: white; border-bottom: 1px solid #e5e7eb; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+header h1 { font-size: 18px; font-weight: 700; }
+header .badge { background: #6366f1; color: white; font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 900px) { .container { grid-template-columns: 1fr; } }
+
+.controls { background: white; border-radius: 12px; border: 1px solid #e5e7eb; padding: 20px; }
+.controls h2 { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.controls h2 .icon { width: 16px; height: 16px; }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; font-weight: 500; }
+.form-group input, .form-group textarea, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; outline: none; transition: border-color .15s; }
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: #6366f1; box-shadow: 0 0 0 3px #6366f120; }
+.form-group textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+
+.templates { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+.templates button { padding: 8px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 12px; cursor: pointer; background: white; transition: all .15s; }
+.templates button:hover { border-color: #6366f1; }
+.templates button.active { background: #6366f1; color: white; border-color: #6366f1; }
+
+.preview-area { background: white; border-radius: 12px; border: 1px solid #e5e7eb; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+.preview-area canvas { max-width: 100%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+
+.btn-group { display: flex; gap: 8px; margin-top: 16px; width: 100%; }
+.btn { flex: 1; padding: 10px 16px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.btn-primary { background: #6366f1; color: white; }
+.btn-primary:hover { background: #4f46e5; }
+.btn-primary:disabled { background: #a5b4fc; cursor: not-allowed; }
+.btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+.btn-secondary:hover { background: #e5e7eb; }
+
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; color: #9ca3af; }
+.empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+
+footer { text-align: center; padding: 24px; font-size: 12px; color: #9ca3af; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M9 12l2 2 4-4"/></svg>
+  <h1>闲鱼服务展示卡</h1>
+  <span class="badge">配图生成</span>
+</header>
+
+<div class="container">
+  <!-- Controls -->
+  <div class="controls">
+    <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>填写服务信息</h2>
+
+    <div class="form-group">
+      <label>服务名称</label>
+      <input id="serviceName" value="PPT美化排版" oninput="render()" />
+    </div>
+
+    <div class="form-group">
+      <label>价格标签</label>
+      <input id="priceTag" value="3元/页 · 当天交付" oninput="render()" />
+    </div>
+
+    <div class="form-group">
+      <label>卖点说明（每行一个）</label>
+      <textarea id="features" rows="5" oninput="render()">内容排版美化
+数据图表优化
+配色字体统一
+不满意免费修改</textarea>
+    </div>
+
+    <div class="form-group">
+      <label>口号 / 副标题（可选）</label>
+      <input id="tagline" value="你出内容，我出设计" oninput="render()" />
+    </div>
+
+    <h2 style="margin-top:16px"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>选择模板</h2>
+
+    <div class="templates" id="templateButtons">
+      <button class="active" data-tpl="clean" onclick="selectTemplate('clean')">简约白</button>
+      <button data-tpl="vibrant" onclick="selectTemplate('vibrant')">活力橙</button>
+      <button data-tpl="dark" onclick="selectTemplate('dark')">深色金</button>
+      <button data-tpl="gradient" onclick="selectTemplate('gradient')">渐变紫</button>
+    </div>
+
+    <div class="btn-group" style="margin-top:6px">
+      <button class="btn btn-primary" onclick="download()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载图片
+      </button>
+      <button class="btn btn-secondary" onclick="copyCard()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        复制图片
+      </button>
+    </div>
+
+    <p style="margin-top:12px; font-size:11px; color:#9ca3af; text-align:center;">生成的图片可用于闲鱼商品配图 · 800×1000px</p>
+  </div>
+
+  <!-- Preview -->
+  <div class="preview-area">
+    <canvas id="cardCanvas" width="800" height="1000"></canvas>
+  </div>
+</div>
+
+<footer>闲鱼服务展示卡生成器 · 免费工具</footer>
+
+<script>
+let currentTemplate = 'clean';
+
+function selectTemplate(tpl) {
+  currentTemplate = tpl;
+  document.querySelectorAll('.templates button').forEach(b => b.classList.toggle('active', b.dataset.tpl === tpl));
+  render();
+}
+
+function render() {
+  const canvas = document.getElementById('cardCanvas');
+  const ctx = canvas.getContext('2d');
+  const w = 800, h = 1000;
+
+  const name = document.getElementById('serviceName').value || '服务名称';
+  const price = document.getElementById('priceTag').value || '价格';
+  const features = document.getElementById('features').value.split('\n').filter(Boolean);
+  const tagline = document.getElementById('tagline').value || '';
+
+  ctx.clearRect(0, 0, w, h);
+
+  const templates = {
+    clean: {
+      bg: ['#ffffff', '#f8fafc'],
+      accent: '#6366f1',
+      text: '#111827',
+      subtext: '#6b7280',
+      cardBg: '#f1f5f9',
+      render(ctx) {
+        const grad = ctx.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0, this.bg[0]); grad.addColorStop(1, this.bg[1]);
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = this.accent; ctx.fillRect(0, 0, w, 6);
+        ctx.fillStyle = this.accent + '15';
+        ctx.beginPath(); ctx.arc(700, 200, 350, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(100, 800, 200, 0, Math.PI * 2); ctx.fill();
+      }
+    },
+    vibrant: {
+      bg: ['#fff7ed', '#ffedd5'],
+      accent: '#ea580c',
+      text: '#1c1917',
+      subtext: '#78716c',
+      cardBg: '#ffedd5',
+      render(ctx) {
+        const grad = ctx.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0, this.bg[0]); grad.addColorStop(1, this.bg[1]);
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = this.accent; ctx.fillRect(0, 0, w, 6);
+        ctx.fillStyle = this.accent + '15';
+        ctx.beginPath(); ctx.arc(650, 150, 300, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(150, 850, 250, 0, Math.PI * 2); ctx.fill();
+      }
+    },
+    dark: {
+      bg: ['#111827', '#1f2937'],
+      accent: '#d4a43a',
+      text: '#f9fafb',
+      subtext: '#9ca3af',
+      cardBg: '#1f2937',
+      render(ctx) {
+        const grad = ctx.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0, this.bg[0]); grad.addColorStop(1, this.bg[1]);
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = this.accent + '40'; ctx.lineWidth = 2;
+        ctx.strokeRect(15, 15, w - 30, h - 30);
+        ctx.fillStyle = this.accent + '10';
+        ctx.beginPath(); ctx.arc(400, 500, 400, 0, Math.PI * 2); ctx.fill();
+      }
+    },
+    gradient: {
+      bg: ['#f5f3ff', '#ede9fe'],
+      accent: '#7c3aed',
+      text: '#1e1b4b',
+      subtext: '#6d28d9',
+      cardBg: '#ede9fe',
+      render(ctx) {
+        const grad = ctx.createLinearGradient(0, 0, w, h);
+        grad.addColorStop(0, this.bg[0]); grad.addColorStop(1, this.bg[1]);
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = this.accent; ctx.fillRect(0, 0, w, 6);
+        ctx.fillStyle = this.accent + '12';
+        ctx.beginPath(); ctx.arc(680, 180, 280, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(120, 820, 180, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  };
+
+  const tpl = templates[currentTemplate] || templates.clean;
+  tpl.render(ctx);
+
+  // Service icon badge
+  ctx.fillStyle = tpl.accent + '20';
+  roundRect(ctx, 340, 35, 120, 40, 20); ctx.fill();
+  ctx.fillStyle = tpl.accent;
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('✦ 服务项目', 400, 62);
+
+  // Service name - large
+  ctx.fillStyle = tpl.text;
+  ctx.font = 'bold 48px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(name, 400, 160);
+
+  // Tagline
+  if (tagline) {
+    ctx.fillStyle = tpl.subtext;
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(tagline, 400, 205);
+  }
+
+  // Divider
+  ctx.strokeStyle = tpl.accent + '30';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(250, 240); ctx.lineTo(550, 240); ctx.stroke();
+
+  // Features card
+  const cardX = 60, cardY = 275, cardW = 680, cardH = Math.max(features.length * 72 + 50, 350);
+  ctx.fillStyle = tpl.cardBg + '80';
+  roundRect(ctx, cardX, cardY, cardW, cardH, 16); ctx.fill();
+  ctx.strokeStyle = tpl.accent + '20';
+  ctx.lineWidth = 1;
+  roundRect(ctx, cardX, cardY, cardW, cardH, 16); ctx.stroke();
+
+  ctx.fillStyle = tpl.text;
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('服务内容', cardX + 30, cardY + 40);
+
+  ctx.fillStyle = tpl.subtext;
+  ctx.font = '16px sans-serif';
+  const startY = cardY + 80;
+  features.forEach((f, i) => {
+    ctx.fillStyle = tpl.accent;
+    ctx.beginPath(); ctx.arc(cardX + 38, startY + i * 52 + 8, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = tpl.text;
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(f, cardX + 58, startY + i * 52 + 13);
+  });
+
+  // Price tag
+  const priceY = Math.max(cardY + cardH + 40, 720);
+  ctx.fillStyle = tpl.accent + '15';
+  roundRect(ctx, 200, priceY, 400, 70, 35); ctx.fill();
+  ctx.strokeStyle = tpl.accent + '30';
+  ctx.lineWidth = 1;
+  roundRect(ctx, 200, priceY, 400, 70, 35); ctx.stroke();
+
+  ctx.fillStyle = tpl.accent;
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(price, 400, priceY + 45);
+
+  // Trust badge
+  ctx.fillStyle = tpl.subtext;
+  ctx.font = '13px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('✓ 满意为止 · 快速交付 · 售后无忧', 400, h - 30);
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function download() {
+  const canvas = document.getElementById('cardCanvas');
+  const link = document.createElement('a');
+  link.download = '服务展示卡_' + (document.getElementById('serviceName').value || 'untitled') + '.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+
+function copyCard() {
+  const canvas = document.getElementById('cardCanvas');
+  canvas.toBlob(async (blob) => {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({ 'image/png': blob })
+      ]);
+      alert('✅ 图片已复制到剪贴板，可在闲鱼发布页直接粘贴！');
+    } catch {
+      canvas.toDataURL('image/png');
+      alert('复制失败，请使用"下载图片"保存后再上传');
+    }
+  });
+}
+
+// Initial render
+render();
+</script>
+
+</body>
+</html>
