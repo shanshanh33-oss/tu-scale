@@ -672,7 +672,7 @@ function App() {
           </div>
         )}
         <button
-          onClick={() => window.open("https://afdian.com/a/your-afdian-link", "_blank")}
+          onClick={() => window.open("https://afdian.com/a/upscale", "_blank")}
           onMouseEnter={() => setShowDonateTooltip(true)}
           onMouseLeave={() => setShowDonateTooltip(false)}
           className="group w-14 h-14 bg-gradient-to-br from-pink-300 to-purple-400 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer"
