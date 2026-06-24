@@ -1,5 +1,4 @@
  import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
- import { track } from '@vercel/analytics'
  import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon } from 'lucide-react'
 
 const TARGET_PRESETS = [
@@ -140,13 +139,6 @@ function App() {
 
   const handleProcess = useCallback(async () => {
     const startTime = Date.now();
-    track('upscale_start', {
-      mode: upscaleMode,
-      scale: upscaleMode === 'scale' ? scale : undefined,
-      format,
-      enhance: enhance ? 'yes' : 'no'
-    });
-    if (!preview || !origDims) return;
     setProcessing(true);
     setProgress(0);
     setError(null);
@@ -195,15 +187,6 @@ function App() {
 
       setResult(result.dataUrl);
       setResultDims({ w: result.width, h: result.height });
-      track('upscale_success', {
-        inputW: origDims.w,
-        inputH: origDims.h,
-        outputW: result.width,
-        outputH: result.height,
-        duration: Math.round((Date.now() - startTime) / 1000) + 's',
-        mode: upscaleMode,
-        format
-      });
       const sizeKB = result.size < 1024 * 1024
         ? (result.size / 1024).toFixed(1) + ' KB'
         : (result.size / (1024 * 1024)).toFixed(1) + ' MB';
@@ -211,7 +194,6 @@ function App() {
       setProgress(100);
     } catch (err) {
       setError(err.message);
-      track('upscale_error', { error: err.message, duration: Math.round((Date.now() - startTime) / 1000) + 's' });
       setProgress(0);
     } finally {
       clearInterval(timer);
