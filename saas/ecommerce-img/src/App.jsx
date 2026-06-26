@@ -14,7 +14,21 @@ const TARGET_PRESETS = [
  const MAX_BATCH = 50
  const STORAGE_KEY = 'tuscale_settings'
 const IMAGE_EXTS = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','.svg','.ico','.avif','.heic','.heif']
- 
+const WARN_OUTPUT_PIXELS = 45_000_000
+const MAX_OUTPUT_PIXELS = 80_000_000
+const MAX_AI_INPUT_EDGE = 2048
+const MAX_AI_INPUT_PIXELS = 4_200_000
+
+const revokeObjectUrl = (url) => {
+  if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
+}
+
+const formatMegapixels = (pixels) => `${(pixels / 1_000_000).toFixed(pixels >= 10_000_000 ? 0 : 1)}MP`
+
+const revokeBatchResultUrls = (items) => {
+  items.forEach(item => revokeObjectUrl(item.result))
+}
+
  function App() {
   // --- 单图模式状态 ---
   const [file, setFile] = useState(null)
@@ -46,9 +60,10 @@ const IMAGE_EXTS = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','
 
   // --- 单图处理状态 ---
   const [processing, setProcessing] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [result, setResult] = useState(null)
-  const [resultDims, setResultDims] = useState(null)
+    const [progress, setProgress] = useState(0)
+    const [processStage, setProcessStage] = useState('')
+    const [result, setResult] = useState(null)
+    const [resultDims, setResultDims] = useState(null)
   const [resultSize, setResultSize] = useState(null)
   const [error, setError] = useState(null)
   const [dragOver, setDragOver] = useState(false)
@@ -61,9 +76,16 @@ const IMAGE_EXTS = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','
   const [showDonateTooltip, setShowDonateTooltip] = useState(false)
   const [showRewardModal, setShowRewardModal] = useState(false)
 
-  // --- 预加载 AI 模型 ---
-  useEffect(() => {
-    if (aiUpscale) {
+    // --- 预加载 AI 模型 ---
+    useEffect(() => {
+      if (!aiUpscale) {
+        setAiModelLoading(false)
+        return
+      }
+      if (isModelLoaded()) {
+        setAiModelReady(true)
+        return
+      }
       let cancelled = false
       setAiModelLoading(true)
       loadModel()
@@ -71,28 +93,31 @@ const IMAGE_EXTS = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','
         .catch(() => { if (!cancelled) setAiModelReady(false) })
         .finally(() => { if (!cancelled) setAiModelLoading(false) })
       return () => { cancelled = true }
-    }
-  }, [aiUpscale])
+    }, [aiUpscale])
 
   const ensureAiModel = useCallback(async () => {
     if (!aiUpscale || aiModelReady) return
     setAiModelLoading(true)
     try {
-      const ok = await loadModel()
-      setAiModelReady(!!ok)
-      if (!ok) throw new Error('AI_MODEL_LOAD_FAILED')
+        const ok = await loadModel()
+        setAiModelReady(!!ok)
+        if (!ok) {
+          setAiUpscale(false)
+          throw new Error('AI_MODEL_LOAD_FAILED')
+        }
     } finally {
       setAiModelLoading(false)
     }
   }, [aiUpscale, aiModelReady])
 
   const getProcessErrorMessage = useCallback((err) => {
-    const msg = err?.message || ''
-    if (msg === 'AI_MODEL_LOAD_FAILED' || (aiUpscale && /ai|onnx|model|backend|fetch|server/i.test(msg))) {
-      return 'AI 模型加载失败，请关闭 AI 放大后重试，或稍后再试。'
-    }
-    return msg || '处理失败，请换一张图片或降低输出尺寸后重试。'
-  }, [aiUpscale])
+      const msg = err?.message || ''
+      if (msg === 'AI_MODEL_LOAD_FAILED' || (aiUpscale && /ai|onnx|model|backend|fetch|server/i.test(msg))) {
+        return 'AI 模型加载失败，请关闭 AI 放大后重试，或稍后再试。'
+      }
+      if (msg === 'EXPORT_FAILED') return '图片导出失败，请换成 PNG 或降低输出尺寸后重试。'
+      return msg || '处理失败，请换一张图片或降低输出尺寸后重试。'
+    }, [aiUpscale])
 
   // --- 批量模式状态 ---
   const [batchMode, setBatchMode] = useState(false)
@@ -113,11 +138,12 @@ const IMAGE_EXTS = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','
       folderRef.current.setAttribute('webkitdirectory', '')
     }
   }, [batchMode])
- const batchCancelRef = useRef(false)
+   const batchCancelRef = useRef(false)
 const pendingCountRef = useRef(0)
 const doneCountRef = useRef(0)
 const keyRefs = useRef({})
- 
+const batchItemsRef = useRef([])
+
  const leftScrollRef = useRef(null)
   const rightScrollRef = useRef(null)
   const syncingRef = useRef(false)
@@ -132,6 +158,18 @@ const keyRefs = useRef({})
   const fsLeftScrollRef = useRef(null)
   const fsRightScrollRef = useRef(null)
   const fsSyncingRef = useRef(false)
+
+  useEffect(() => {
+    return () => revokeObjectUrl(result)
+  }, [result])
+
+  useEffect(() => {
+    batchItemsRef.current = batchItems
+  }, [batchItems])
+
+  useEffect(() => {
+    return () => revokeBatchResultUrls(batchItemsRef.current)
+  }, [])
 
  // --- 键盘快捷键 ---
  useEffect(() => {
@@ -156,7 +194,7 @@ const keyRefs = useRef({})
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
- 
+
  // --- 从 localStorage 读取上次设置 ---
   useEffect(() => {
     try {
@@ -195,19 +233,20 @@ const keyRefs = useRef({})
   }, [scale, format, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
 
   // --- 单图模式 effect ---
-  useEffect(() => {
-    setResult(null)
-    setResultDims(null)
-    setResultSize(null)
-  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, keepRatio, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias])
+    useEffect(() => {
+      setResult(null)
+      setResultDims(null)
+      setResultSize(null)
+      setProcessStage('')
+    }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, keepRatio, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias])
 
   // --- 单图文件处理 ---
   const handleFile = useCallback((f) => {
     if (!f) return
-    setFile(f)
-    setResult(null)
-    setResultDims(null)
-    setResultSize(null)
+      setFile(f)
+      setResult(null)
+      setResultDims(null)
+      setResultSize(null)
     setError(null)
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -235,11 +274,11 @@ const keyRefs = useRef({})
     if (f) { const fext = '.' + f.name.split('.').pop().toLowerCase(); if (IMAGE_EXTS.includes(fext)) handleFile(f) }
  }, [handleFile, batchMode])
 
- const handleRemove = useCallback((e) => {
-    e.stopPropagation()
-    setFile(null); setPreview(null); setOrigDims(null)
-    setResult(null); setResultDims(null); setResultSize(null)
-  }, [])
+    const handleRemove = useCallback((e) => {
+      e.stopPropagation()
+      setFile(null); setPreview(null); setOrigDims(null)
+      setResult(null); setResultDims(null); setResultSize(null); setProcessStage('')
+    }, [])
 
   // --- 批量文件处理（含上限检查）---
  const addFilesWithLimit = useCallback((fileList) => {
@@ -277,7 +316,7 @@ const keyRefs = useRef({})
           img.src = e.target.result
         }
         reader.readAsDataURL(f)
-        return { id, file: f, preview: null, origDims: null, result: null, resultDims: null, resultSize: null, status: 'pending', progress: 0, error: null }
+          return { id, file: f, preview: null, origDims: null, result: null, resultBlob: null, resultDims: null, resultSize: null, status: 'pending', progress: 0, stage: '', error: null }
       })
       return [...prev, ...newItems]
     })
@@ -292,15 +331,22 @@ const keyRefs = useRef({})
     e.target.value = ''
   }, [batchMode, handleFile, addFilesWithLimit])
 
-  const removeBatchItem = useCallback((id) => {
-    setBatchItems(prev => prev.filter(it => it.id !== id))
-  }, [])
+    const removeBatchItem = useCallback((id) => {
+      setBatchItems(prev => {
+        const removed = prev.find(it => it.id === id)
+        if (removed) revokeObjectUrl(removed.result)
+        return prev.filter(it => it.id !== id)
+      })
+    }, [])
 
-  const clearAllBatch = useCallback(() => {
-    setBatchItems([])
-  }, [])
+    const clearAllBatch = useCallback(() => {
+      setBatchItems(prev => {
+        revokeBatchResultUrls(prev)
+        return []
+      })
+    }, [])
 
-  
+
   const handleFolderSelect = useCallback(async () => {
     try {
       if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
@@ -410,7 +456,7 @@ const keyRefs = useRef({})
       setAutoLevels(willAutoLevels)
       setVibrance(willVibrance)
       setSmartSharpen(true)
-      
+
       // Toast feedback
       const msgs = []
       msgs.push('\u667a\u80fd\u68c0\u6d4b\u5b8c\u6210\uff1a')
@@ -466,9 +512,30 @@ const keyRefs = useRef({})
     return { w, h, capped, effectiveScale }
   }, [origDims, scaleMode, scale, targetDims, keepRatio, format])
 
-  const maxScale = origDims
-    ? Math.min(20, Math.floor(Math.min(10000 / origDims.w, 10000 / origDims.h) * 2) / 2)
-    : 20
+    const maxScale = origDims
+      ? Math.min(20, Math.floor(Math.min(10000 / origDims.w, 10000 / origDims.h) * 2) / 2)
+      : 20
+
+    const processEstimate = useMemo(() => {
+      if (!origDims || !expectedOutput) return null
+      const outputPixels = expectedOutput.w * expectedOutput.h
+      const inputPixels = origDims.w * origDims.h
+      const inputEdge = Math.max(origDims.w, origDims.h)
+      const warnings = []
+      let blockReason = ''
+
+      if (outputPixels > MAX_OUTPUT_PIXELS) {
+        blockReason = `输出预计 ${formatMegapixels(outputPixels)}，浏览器端处理风险太高。请降低倍数或分辨率。`
+      } else if (outputPixels > WARN_OUTPUT_PIXELS) {
+        warnings.push(`输出预计 ${formatMegapixels(outputPixels)}，处理会更慢，也会占用更多内存。`)
+      }
+
+      if (aiUpscale && (inputEdge > MAX_AI_INPUT_EDGE || inputPixels > MAX_AI_INPUT_PIXELS)) {
+        blockReason = `AI 模式建议输入长边不超过 ${MAX_AI_INPUT_EDGE}px。请降低尺寸或关闭 AI 放大。`
+      }
+
+      return { outputPixels, inputPixels, inputEdge, warnings, blockReason }
+    }, [origDims, expectedOutput, aiUpscale])
 
   // --- Canvas 放大处理（单图和批量共用）---
   const processImageWithCanvas = (imageUrl, targetW, targetH, doEnhance, fmt) => {
@@ -572,10 +639,12 @@ const keyRefs = useRef({})
 
           const mimeType = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png'
           const quality = fmt === 'png' ? undefined : 0.92
-          const dataUrl = srcCanvas.toDataURL(mimeType, quality)
-          const sizeBytes = dataUrl.length * 0.75
+            const blob = await new Promise((resolve) => srcCanvas.toBlob(resolve, mimeType, quality))
+            if (!blob) throw new Error('EXPORT_FAILED')
+            const dataUrl = URL.createObjectURL(blob)
+            const sizeBytes = blob.size
 
-          resolve({ dataUrl, width: srcCanvas.width, height: srcCanvas.height, size: sizeBytes })
+            resolve({ dataUrl, blob, width: srcCanvas.width, height: srcCanvas.height, size: sizeBytes })
         } catch (e) { reject(e) }
       }
       img.onerror = () => reject(new Error('Failed to load image'))
@@ -962,12 +1031,17 @@ const keyRefs = useRef({})
   }
 
   // --- 单图处理 ---
-  const handleProcess = useCallback(async () => {
-    if (!preview || !origDims) return
-    setProcessing(true)
-    setProgress(0)
-    setError(null)
-    setResult(null)
+    const handleProcess = useCallback(async () => {
+      if (!preview || !origDims) return
+      if (processEstimate?.blockReason) {
+        setError(processEstimate.blockReason)
+        return
+      }
+      setProcessing(true)
+      setProgress(0)
+      setProcessStage('准备处理')
+      setError(null)
+      setResult(null)
 
     let p = 0
     const tick = () => {
@@ -979,27 +1053,32 @@ const keyRefs = useRef({})
     const timer = setInterval(tick, 200)
 
     try {
-      const { targetW, targetH } = calcTargetDimensions(origDims.w, origDims.h, scaleMode, scale, targetDims, keepRatio, format)
-      await ensureAiModel()
-      setProgress(20)
-      const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format)
-      setProgress(95)
-      await new Promise(r => setTimeout(r, 100))
-      setResult(res.dataUrl)
+        const { targetW, targetH } = calcTargetDimensions(origDims.w, origDims.h, scaleMode, scale, targetDims, keepRatio, format)
+        setProcessStage(aiUpscale ? '加载 AI 模型' : '解析图片')
+        await ensureAiModel()
+        setProgress(20)
+        setProcessStage('放大图片')
+        const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format)
+        setProgress(95)
+        setProcessStage('导出结果')
+        await new Promise(r => setTimeout(r, 100))
+        setResult(res.dataUrl)
       setResultDims({ w: res.width, h: res.height })
       const sizeKB = res.size < 1024 * 1024
         ? (res.size / 1024).toFixed(1) + ' KB'
         : (res.size / (1024 * 1024)).toFixed(1) + ' MB'
       setResultSize(sizeKB)
-      setProgress(100)
-    } catch (err) {
-      setError(getProcessErrorMessage(err))
-      setProgress(0)
+        setProgress(100)
+        setProcessStage('完成')
+      } catch (err) {
+        setError(getProcessErrorMessage(err))
+        setProgress(0)
+        setProcessStage('')
     } finally {
       clearInterval(timer)
       setProcessing(false)
     }
-  }, [preview, origDims, scaleMode, scale, targetDims, keepRatio, format, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -1007,15 +1086,15 @@ const keyRefs = useRef({})
     if (pending.length === 0) return
 
     setBatchProcessing(true)
-    setBatchItems(prev => prev.map(it => it.status === 'pending' && it.preview && it.origDims
-      ? { ...it, status: 'pending', progress: 0, result: null, resultDims: null, resultSize: null, error: null }
-      : it
-    ))
+      setBatchItems(prev => prev.map(it => it.status === 'pending' && it.preview && it.origDims
+        ? { ...it, status: 'pending', progress: 0, result: null, resultBlob: null, resultDims: null, resultSize: null, error: null, stage: '' }
+        : it
+      ))
 
     batchCancelRef.current = false
     for (const item of pending) {
       if (batchCancelRef.current) break
-      setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'processing', progress: 0 } : it))
+        setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'processing', progress: 0, stage: '准备处理' } : it))
 
       let p = 0
       const tick = () => {
@@ -1028,11 +1107,22 @@ const keyRefs = useRef({})
       const timer = setInterval(tick, 200)
 
       try {
-        const { targetW, targetH } = calcTargetDimensions(
-          item.origDims.w, item.origDims.h, scaleMode, scale, targetDims, keepRatio, format
-        )
-        await ensureAiModel()
-        const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format)
+          const { targetW, targetH } = calcTargetDimensions(
+            item.origDims.w, item.origDims.h, scaleMode, scale, targetDims, keepRatio, format
+          )
+          const outputPixels = targetW * targetH
+          const inputPixels = item.origDims.w * item.origDims.h
+          const inputEdge = Math.max(item.origDims.w, item.origDims.h)
+          if (outputPixels > MAX_OUTPUT_PIXELS) {
+            throw new Error(`输出预计 ${formatMegapixels(outputPixels)}，请降低倍数或分辨率。`)
+          }
+          if (aiUpscale && (inputEdge > MAX_AI_INPUT_EDGE || inputPixels > MAX_AI_INPUT_PIXELS)) {
+            throw new Error(`AI 模式建议输入长边不超过 ${MAX_AI_INPUT_EDGE}px。`)
+          }
+          setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: aiUpscale ? '加载 AI 模型' : '解析图片' } : it))
+          await ensureAiModel()
+          setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
+          const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format)
         clearInterval(timer)
 
         const sizeKB = res.size < 1024 * 1024
@@ -1041,16 +1131,18 @@ const keyRefs = useRef({})
 
         setBatchItems(prev => prev.map(it => it.id === item.id ? {
           ...it,
-          status: 'done',
-          progress: 100,
-          result: res.dataUrl,
-          resultDims: { w: res.width, h: res.height },
-          resultSize: sizeKB
-        } : it))
-      } catch (err) {
-        clearInterval(timer)
-        setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'error', progress: 0, error: getProcessErrorMessage(err) } : it))
-      }
+            status: 'done',
+            progress: 100,
+            result: res.dataUrl,
+            resultBlob: res.blob,
+            resultDims: { w: res.width, h: res.height },
+            resultSize: sizeKB,
+            stage: '完成'
+          } : it))
+        } catch (err) {
+          clearInterval(timer)
+          setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'error', progress: 0, error: getProcessErrorMessage(err), stage: '' } : it))
+        }
     }
 
     batchCancelRef.current = false
@@ -1100,12 +1192,19 @@ const keyRefs = useRef({})
     const zip = new JSZip()
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
 
-    doneItems.forEach((item, i) => {
-      const name = item.file.name.replace(/\.[^.]+$/, '')
-      const dataUrl = item.result
-      const base64 = dataUrl.split(',')[1]
-      zip.file(renderFileName(item, i) + '.' + ext, base64, { base64: true })
-    })
+        for (let i = 0; i < doneItems.length; i++) {
+          const item = doneItems[i]
+          const fileName = renderFileName(item, i) + '.' + ext
+          if (item.resultBlob) {
+            zip.file(fileName, item.resultBlob)
+          } else if (item.result.startsWith('data:')) {
+            const base64 = item.result.split(',')[1]
+            zip.file(fileName, base64, { base64: true })
+          } else {
+            const response = await fetch(item.result)
+            zip.file(fileName, await response.blob())
+          }
+      }
 
     const zipBlob = await zip.generateAsync({ type: 'blob' })
     const a = document.createElement('a')
@@ -1124,7 +1223,7 @@ const keyRefs = useRef({})
   pendingCountRef.current = pendingCount
   doneCountRef.current = doneCount
   keyRefs.current = { batchMode, preview, processing, result, batchProcessing, handleBatchProcess, handleProcess, downloadAllAsZip, handleDownload }
- 
+
  return (
     <div className="min-h-screen bg-gray-50/80">
       <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 flex items-center gap-2.5 sticky top-0 z-10 shadow-sm">
@@ -1138,7 +1237,7 @@ const keyRefs = useRef({})
         </div>
         {/* 批量/单图切换 */}
         <button
-          onClick={() => { setBatchMode(!batchMode); setBatchItems([]); setFile(null); setPreview(null); setOrigDims(null); setResult(null); setResultDims(null); setResultSize(null); setError(null) }}
+            onClick={() => { setBatchMode(!batchMode); clearAllBatch(); setFile(null); setPreview(null); setOrigDims(null); setResult(null); setResultDims(null); setResultSize(null); setProcessStage(''); setError(null) }}
           className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors shrink-0 ${
             batchMode
               ? 'bg-indigo-50 border-indigo-500 text-indigo-700'
@@ -1247,11 +1346,14 @@ const keyRefs = useRef({})
                         {item.resultSize && (
                           <p className="text-[9px] text-indigo-500">{item.resultDims.w}&times;{item.resultDims.h} &middot; {item.resultSize}</p>
                         )}
-                        {item.status === 'processing' && (
-                          <div className="mt-1 h-1 bg-gray-200 rounded-full overflow-hidden">
-                            <div className="h-full bg-indigo-500 rounded-full transition-all duration-300" style={{ width: `${item.progress}%` }} />
-                          </div>
-                        )}
+                          {item.status === 'processing' && (
+                            <div className="mt-1 space-y-1">
+                              <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+                                <div className="h-full bg-indigo-500 rounded-full transition-all duration-300" style={{ width: `${item.progress}%` }} />
+                              </div>
+                              <p className="text-[9px] text-indigo-500 truncate">{item.stage || '处理中'}</p>
+                            </div>
+                          )}
                         {item.status === 'error' && (
                           <p className="text-[9px] text-red-500 truncate">{item.error}</p>
                         )}
@@ -1350,11 +1452,14 @@ const keyRefs = useRef({})
                   <p className="text-amber-600">{'\u6709\u6548\u6700\u5927\u500d\u6570\u4e3a'} <strong>{maxScale}x</strong>{'\uff0c\u8d85\u8fc7\u5c06\u81ea\u52a8\u622a\u65ad'}</p>
                 </div>
               )}
-              {!batchMode && expectedOutput && expectedOutput.capped && (
-                <p className="text-xs text-amber-600">* {'\u5df2\u8d85\u8fc7\u4e0a\u9650\uff0c\u5b9e\u9645\u8f93\u51fa\u4f1a\u6309'} 10000px {'\u957f\u8fb9\u88c1\u5207'}</p>
-              )}
-            </div>
-          )}
+                {!batchMode && expectedOutput && expectedOutput.capped && (
+                  <p className="text-xs text-amber-600">* {'\u5df2\u8d85\u8fc7\u4e0a\u9650\uff0c\u5b9e\u9645\u8f93\u51fa\u4f1a\u6309'} 10000px {'\u957f\u8fb9\u88c1\u5207'}</p>
+                )}
+                {!batchMode && processEstimate?.warnings.map((warning) => (
+                  <p key={warning} className="text-xs text-amber-600">* {warning}</p>
+                ))}
+              </div>
+            )}
 
           {/* 按目标分辨率 */}
           {scaleMode === 'target' && (
@@ -1486,35 +1591,47 @@ const keyRefs = useRef({})
                     {'\u6297\u952f\u9f7f'}
                   </label>
                 </div>
-                {aiUpscale && (
-                  <p className="mt-2 text-[11px] leading-5 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                    {aiModelLoading
-                      ? '正在加载 AI 模型，首次使用可能需要数秒。'
-                      : aiModelReady
-                        ? 'AI 模型已就绪，处理大图时会占用更多浏览器内存。'
-                        : '首次使用会下载 AI 模型，处理过程完全在浏览器端完成。'}
-                  </p>
-                )}
-              </div>
+                  {aiUpscale && (
+                    <p className="mt-2 text-[11px] leading-5 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                      {aiModelLoading
+                        ? '正在加载 AI 模型，首次使用可能需要数秒。'
+                        : aiModelReady
+                          ? 'AI 模型已就绪，处理大图时会占用更多浏览器内存。'
+                          : '首次使用会下载 AI 模型，处理过程完全在浏览器端完成。'}
+                    </p>
+                  )}
+                  {!batchMode && processEstimate?.blockReason && (
+                    <p className="mt-2 text-[11px] leading-5 text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                      {processEstimate.blockReason}
+                    </p>
+                  )}
+                </div>
             </div>
           </div>
           {/* 提交按钮 */}
           {!batchMode && (
             <>
-              {processing && (
-                <div className="space-y-1">
+                {processing && (
+                  <div className="space-y-1">
                   <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
                     <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
                       style={{ width: `${progress}%` }} />
                   </div>
-                  <div className="flex justify-between text-[10px] text-gray-400 px-0.5">
-                    <span>{'\u89e3\u6790'}</span><span>{'\u653e\u5927'}</span><span>{'\u9510\u5316'}</span><span>{'\u8f93\u51fa'}</span>
+                    <div className="flex justify-between text-[10px] text-gray-400 px-0.5">
+                      <span>{'\u89e3\u6790'}</span><span>{'\u653e\u5927'}</span><span>{'\u9510\u5316'}</span><span>{'\u8f93\u51fa'}</span>
+                    </div>
+                    <div className="text-[11px] text-indigo-600 font-medium">{processStage || '准备处理'}</div>
                   </div>
-                </div>
-              )}
+                )}
 
-              <button onClick={handleProcess} disabled={!preview || processing}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-indigo-300 text-white rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors">
+                {!processing && processEstimate?.warnings.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs leading-relaxed text-amber-700">
+                    {processEstimate.warnings[0]}
+                  </div>
+                )}
+
+                <button onClick={handleProcess} disabled={!preview || processing || !!processEstimate?.blockReason}
+                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-indigo-300 text-white rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors">
                 {processing ? <><Loader2 className="w-4 h-4 animate-spin" /> {'\u5904\u7406\u4e2d...'}</> : <><ZoomIn className="w-4 h-4" /> {'\u5f00\u59cb\u653e\u5927'}</>}
               </button>
 
