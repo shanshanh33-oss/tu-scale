@@ -13,9 +13,15 @@ const EVENTS = [
   'download_zip',
 ]
 
+const METRICS = [
+  ...EVENTS,
+  'unique_visitor',
+]
+
 const LABELS = {
   page_view: '页面浏览',
   session_start: '访问人数粗略值',
+  unique_visitor: '独立访客',
   image_uploaded: '上传图片',
   ai_enabled: '开启 AI',
   process_start: '开始处理',
@@ -93,10 +99,11 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
   const recentDays = [...days].reverse()
 
   const metricCards = [
-    { label: '今天访问', value: today.page_view, hint: `访客粗略值 ${formatNumber(today.session_start)}` },
+    { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
+    { label: '今天浏览', value: today.page_view, hint: `平均浏览 ${today.unique_visitor ? (today.page_view / today.unique_visitor).toFixed(1) : '0'} 次/人` },
     { label: '今天上传', value: today.image_uploaded, hint: `处理成功 ${formatNumber(sumEvents(today, ['process_success', 'batch_item_success']))}` },
     { label: '今天下载', value: downloadsToday, hint: `ZIP 下载 ${formatNumber(today.download_zip)}` },
-    { label: '累计访问', value: totals.page_view, hint: `累计访客粗略值 ${formatNumber(totals.session_start)}` },
+    { label: '累计独立访客', value: totals.unique_visitor, hint: `累计会话 ${formatNumber(totals.session_start)}` },
     { label: '累计上传', value: totals.image_uploaded, hint: `成功处理 ${formatNumber(processTotal)}` },
     { label: '累计下载', value: downloadsTotal, hint: `处理错误率 ${percent(processErrors, processTotal + processErrors)}` },
   ].map(renderMetricCard).join('')
@@ -108,6 +115,7 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
       <tr>
         <td>${day.day}</td>
         <td><b>${formatNumber(day.page_view)}</b>${renderBar(day.page_view || 0, visitMax)}</td>
+        <td><b>${formatNumber(day.unique_visitor)}</b></td>
         <td><b>${formatNumber(day.session_start)}</b></td>
         <td><b>${formatNumber(day.image_uploaded)}</b>${renderBar(day.image_uploaded || 0, uploadMax)}</td>
         <td><b>${formatNumber(processed)}</b></td>
@@ -315,6 +323,7 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
             <tr>
               <th>日期</th>
               <th>浏览</th>
+              <th>独立访客</th>
               <th>访客粗略值</th>
               <th>上传图片</th>
               <th>处理成功</th>
@@ -367,23 +376,23 @@ export async function onRequestGet(context) {
       configured: false,
       message: 'Missing Cloudflare KV binding: TUSCALE_ANALYTICS',
       labels: LABELS,
-      totals: Object.fromEntries(EVENTS.map((event) => [event, 0])),
+      totals: Object.fromEntries(METRICS.map((metric) => [metric, 0])),
       days: [],
     }
     return wantsHtml && !wantsJson ? html(renderStatsPage(body), 202) : json(body, 202)
   }
 
   const totals = {}
-  await Promise.all(EVENTS.map(async (event) => {
-    totals[event] = await readCount(kv, `total:${event}`)
+  await Promise.all(METRICS.map(async (metric) => {
+    totals[metric] = await readCount(kv, `total:${metric}`)
   }))
 
   const days = []
   for (let i = 0; i < 30; i++) {
     const day = getChinaDate(i)
     const values = {}
-    await Promise.all(EVENTS.map(async (event) => {
-      values[event] = await readCount(kv, `day:${day}:${event}`)
+    await Promise.all(METRICS.map(async (metric) => {
+      values[metric] = await readCount(kv, `day:${day}:${metric}`)
     }))
     days.push({ day, ...values })
   }
