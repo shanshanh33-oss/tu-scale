@@ -87,6 +87,125 @@ const renderBar = (value, max) => {
   return `<div class="bar" aria-label="${formatNumber(value)}"><i style="width:${width}%"></i></div>`
 }
 
+const getRiskLevel = (score) => {
+  if (score >= 7) return { label: '高', className: 'high', text: '存在明显批量使用迹象，建议开启软限制和注册引导。' }
+  if (score >= 4) return { label: '中', className: 'medium', text: '有批量使用迹象，建议继续观察并限制超大任务。' }
+  return { label: '低', className: 'low', text: '目前更像正常试用，可以继续免费观察。' }
+}
+
+const buildAnalysis = ({ today, totals }) => {
+  const visitors = today.unique_visitor || 0
+  const uploads = today.image_uploaded || 0
+  const processed = sumEvents(today, ['process_success', 'batch_item_success'])
+  const errors = sumEvents(today, ['process_error', 'batch_item_error'])
+  const downloads = sumEvents(today, ['download', 'download_zip'])
+  const zipDownloads = today.download_zip || 0
+  const batchSuccess = today.batch_item_success || 0
+  const totalProcessed = sumEvents(totals, ['process_success', 'batch_item_success'])
+  const totalErrors = sumEvents(totals, ['process_error', 'batch_item_error'])
+
+  const uploadPerVisitor = visitors ? uploads / visitors : 0
+  const downloadPerVisitor = visitors ? downloads / visitors : 0
+  const zipShare = downloads ? zipDownloads / downloads : 0
+  const processSuccessRate = uploads ? processed / uploads : 0
+
+  let riskScore = 0
+  if (uploadPerVisitor >= 50) riskScore += 3
+  else if (uploadPerVisitor >= 20) riskScore += 2
+  else if (uploadPerVisitor >= 8) riskScore += 1
+
+  if (downloadPerVisitor >= 50) riskScore += 3
+  else if (downloadPerVisitor >= 20) riskScore += 2
+  else if (downloadPerVisitor >= 8) riskScore += 1
+
+  if (zipShare >= 0.8 && zipDownloads >= 20) riskScore += 2
+  else if (zipShare >= 0.5 && zipDownloads >= 10) riskScore += 1
+
+  if (batchSuccess >= 50) riskScore += 2
+  else if (batchSuccess >= 10) riskScore += 1
+
+  const risk = getRiskLevel(riskScore)
+  const demandSignal = uploads >= 50 && downloads >= 20 && processSuccessRate >= 0.25
+  const likelyBatch = uploadPerVisitor >= 20 || downloadPerVisitor >= 20 || zipShare >= 0.7 || batchSuccess >= 20
+  const shouldCharge = demandSignal && (likelyBatch || downloads >= processed)
+
+  const summary = likelyBatch
+    ? '今天高度疑似存在批量放大/批量下载行为。当前数据只能确认“少量访客贡献大量处理量”，还不能确认是否为同一个用户。'
+    : '今天暂未看到强烈批量使用迹象，更像普通免费试用或低频使用。'
+
+  const recommendation = shouldCharge
+    ? '保留免费入口，但建议尽快上线软限制：未登录每日少量免费，批量 ZIP、优先队列和更高额度引导注册或积分。'
+    : '继续免费观察，同时补充 visitor/session 维度统计，为后续判断回头用户和真实付费意愿做准备。'
+
+  const facts = [
+    `平均每位独立访客上传 ${uploadPerVisitor.toFixed(1)} 张，下载 ${downloadPerVisitor.toFixed(1)} 次。`,
+    `ZIP 下载占今日下载 ${percent(zipDownloads, downloads)}，ZIP 数量为 ${formatNumber(zipDownloads)}。`,
+    `今日上传到成功处理比例约 ${percent(processed, uploads)}，今日处理错误率 ${percent(errors, processed + errors)}。`,
+    `累计处理错误率 ${percent(totalErrors, totalProcessed + totalErrors)}。`,
+  ]
+
+  const nextActions = shouldCharge
+    ? [
+        '暂不取消免费，先把大批量任务放入慢速队列。',
+        '未登录用户保留少量免费次数，ZIP 下载或批量处理提示注册。',
+        '后台增加 visitor_id / session_id 统计，确认是否为回头用户。',
+      ]
+    : [
+        '继续免费开放，避免过早打断种子用户。',
+        '先记录单个 visitor 的上传、处理、ZIP 下载和隔日回访。',
+        '如果连续 2-3 天出现高上传/高 ZIP，再开启软限制。',
+      ]
+
+  return {
+    demandSignal,
+    facts,
+    likelyBatch,
+    nextActions,
+    recommendation,
+    risk,
+    summary,
+  }
+}
+
+const renderAnalysis = (analysis) => `
+  <section class="analysis-section">
+    <div class="section-head">
+      <div>
+        <h2>每日分析报告</h2>
+        <p>根据当前统计自动判断批量使用、需求信号和下一步动作。</p>
+      </div>
+      <span class="risk-pill ${analysis.risk.className}">风险 ${analysis.risk.label}</span>
+    </div>
+    <div class="analysis-grid">
+      <article class="analysis-card">
+        <span>批量使用判断</span>
+        <strong>${analysis.likelyBatch ? '疑似批量使用' : '暂未明显异常'}</strong>
+        <p>${analysis.summary}</p>
+      </article>
+      <article class="analysis-card">
+        <span>需求信号</span>
+        <strong>${analysis.demandSignal ? '有付费验证价值' : '继续观察'}</strong>
+        <p>${analysis.recommendation}</p>
+      </article>
+      <article class="analysis-card">
+        <span>风险说明</span>
+        <strong>${analysis.risk.text}</strong>
+        <p>页面目前只有聚合统计，无法直接确认具体是哪一个用户。</p>
+      </article>
+    </div>
+    <div class="analysis-lists">
+      <div>
+        <h3>关键依据</h3>
+        <ul>${analysis.facts.map((item) => `<li>${item}</li>`).join('')}</ul>
+      </div>
+      <div>
+        <h3>建议动作</h3>
+        <ul>${analysis.nextActions.map((item) => `<li>${item}</li>`).join('')}</ul>
+      </div>
+    </div>
+  </section>
+`
+
 const renderStatsPage = ({ labels, totals, days, configured = true, message = '' }) => {
   const today = getToday(days)
   const downloadsToday = sumEvents(today, ['download', 'download_zip'])
@@ -97,6 +216,7 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
   const downloadMax = getMax(days, ['download', 'download_zip'])
   const visitMax = getMax(days, ['page_view'])
   const recentDays = [...days].reverse()
+  const analysis = buildAnalysis({ today, totals })
 
   const metricCards = [
     { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
@@ -288,6 +408,83 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
       font-size: 13px;
       color: var(--muted);
     }
+    .analysis-section {
+      border-color: #d8e6ff;
+    }
+    .risk-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .risk-pill.low {
+      color: #0f7a55;
+      background: #edfdf6;
+      border: 1px solid #bdebd8;
+    }
+    .risk-pill.medium {
+      color: #9a5a00;
+      background: #fff7e6;
+      border: 1px solid #f3d49a;
+    }
+    .risk-pill.high {
+      color: #b42318;
+      background: #fff1f0;
+      border: 1px solid #ffccc7;
+    }
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding: 18px;
+    }
+    .analysis-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfd;
+    }
+    .analysis-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .analysis-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+    .analysis-card p {
+      font-size: 14px;
+    }
+    .analysis-lists {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      padding: 0 18px 18px;
+    }
+    .analysis-lists > div {
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+    ul {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+    }
+    li + li {
+      margin-top: 6px;
+    }
     @media (max-width: 760px) {
       main { width: min(100% - 24px, 1120px); padding-top: 22px; }
       header { display: block; }
@@ -296,6 +493,9 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
       .metric-card { padding: 16px; }
       .section-head { display: block; }
       .section-head p { margin-top: 4px; }
+      .risk-pill { margin-top: 12px; }
+      .analysis-grid,
+      .analysis-lists { grid-template-columns: 1fr; }
       th, td { padding: 11px 14px; }
     }
   </style>
@@ -311,6 +511,8 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
     </header>
 
     <div class="metrics">${metricCards}</div>
+
+    ${renderAnalysis(analysis)}
 
     <section>
       <div class="section-head">
