@@ -37,6 +37,11 @@ const addCount = async (kv, key, amount) => {
   await kv.put(key, String(current + amount))
 }
 
+const countIdentityEvent = async (kv, type, id, day, event, amount) => {
+  if (!ID_PATTERN.test(id)) return
+  await addCount(kv, `${type}:day:${day}:${id}:${event}`, amount)
+}
+
 const countUniqueVisitor = async (kv, visitorId, day) => {
   if (!ID_PATTERN.test(visitorId)) return
 
@@ -81,11 +86,14 @@ export async function onRequestPost(context) {
   const amount = Math.max(1, Math.min(Number.isFinite(rawCount) ? Math.round(rawCount) : 1, 100))
   const day = getChinaDate()
   const visitorId = String(body?.data?.visitorId || '').trim()
+  const sessionId = String(body?.data?.sessionId || '').trim()
 
   await Promise.all([
     addCount(kv, `total:${event}`, amount),
     addCount(kv, `day:${day}:${event}`, amount),
     countUniqueVisitor(kv, visitorId, day),
+    countIdentityEvent(kv, 'visitor', visitorId, day, event, amount),
+    countIdentityEvent(kv, 'session', sessionId, day, event, amount),
   ])
 
   return json({ ok: true })

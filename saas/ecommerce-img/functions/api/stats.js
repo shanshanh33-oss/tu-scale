@@ -61,6 +61,17 @@ const readCount = async (kv, key) => {
   return Number.isFinite(count) ? count : 0
 }
 
+const readKvList = async (kv, prefix) => {
+  const keys = []
+  let cursor
+  do {
+    const result = await kv.list({ prefix, cursor })
+    keys.push(...(result.keys || []))
+    cursor = result.list_complete ? undefined : result.cursor
+  } while (cursor && keys.length < 5000)
+  return keys
+}
+
 const formatNumber = (value) => new Intl.NumberFormat('zh-CN').format(value || 0)
 
 const getToday = (days) => days[0] || {}
@@ -87,13 +98,78 @@ const renderBar = (value, max) => {
   return `<div class="bar" aria-label="${formatNumber(value)}"><i style="width:${width}%"></i></div>`
 }
 
+const maskId = (id) => {
+  if (!id) return '-'
+  const prefix = id.slice(0, 2)
+  const tail = id.slice(-6)
+  return `${prefix}...${tail}`
+}
+
+const getIdentityStats = async (kv, type, day) => {
+  const prefix = `${type}:day:${day}:`
+  const keys = await readKvList(kv, prefix)
+  const records = new Map()
+
+  await Promise.all(keys.map(async ({ name }) => {
+    const rest = name.slice(prefix.length)
+    const parts = rest.split(':')
+    if (parts.length !== 2) return
+    const [id, event] = parts
+    if (!EVENTS.includes(event)) return
+    const current = records.get(id) || { id }
+    current[event] = await readCount(kv, name)
+    records.set(id, current)
+  }))
+
+  const rows = [...records.values()].map((record) => {
+    const processed = sumEvents(record, ['process_success', 'batch_item_success'])
+    const errors = sumEvents(record, ['process_error', 'batch_item_error'])
+    const downloads = sumEvents(record, ['download', 'download_zip'])
+    const score = (record.image_uploaded || 0) + processed + downloads
+    return {
+      ...record,
+      downloads,
+      errors,
+      processed,
+      score,
+    }
+  }).sort((a, b) => b.score - a.score)
+
+  return rows.slice(0, 8)
+}
+
+const getTodayReturningVisitors = async (kv, days) => {
+  const today = days[0]?.day
+  if (!today) return { returning: 0, trackedToday: 0 }
+
+  const todayKeys = await readKvList(kv, `visitor:day:${today}:`)
+  const todayIds = todayKeys
+    .map(({ name }) => name.slice(`visitor:day:${today}:`.length).split(':')[0])
+    .filter(Boolean)
+
+  const previousIds = new Set()
+  for (const day of days.slice(1, 8)) {
+    const keys = await readKvList(kv, `visitor:day:${day.day}:`)
+    keys.forEach(({ name }) => {
+      const id = name.slice(`visitor:day:${day.day}:`.length).split(':')[0]
+      if (id) previousIds.add(id)
+    })
+  }
+
+  const uniqueToday = [...new Set(todayIds)]
+  return {
+    returning: uniqueToday.filter((id) => previousIds.has(id)).length,
+    trackedToday: uniqueToday.length,
+  }
+}
+
 const getRiskLevel = (score) => {
-  if (score >= 7) return { label: '高', className: 'high', text: '存在明显批量使用迹象，建议开启软限制和注册引导。' }
+  if (score >= 7) return { label: '高', className: 'high', text: '存在明显批量使用迹象，免费资源和未来 API 成本容易被少数用户快速消耗。' }
   if (score >= 4) return { label: '中', className: 'medium', text: '有批量使用迹象，建议继续观察并限制超大任务。' }
   return { label: '低', className: 'low', text: '目前更像正常试用，可以继续免费观察。' }
 }
 
-const buildAnalysis = ({ today, totals }) => {
+const buildAnalysis = ({ today, totals, identityStats }) => {
   const visitors = today.unique_visitor || 0
   const uploads = today.image_uploaded || 0
   const processed = sumEvents(today, ['process_success', 'batch_item_success'])
@@ -103,6 +179,9 @@ const buildAnalysis = ({ today, totals }) => {
   const batchSuccess = today.batch_item_success || 0
   const totalProcessed = sumEvents(totals, ['process_success', 'batch_item_success'])
   const totalErrors = sumEvents(totals, ['process_error', 'batch_item_error'])
+  const topVisitor = identityStats?.visitors?.[0]
+  const returning = identityStats?.returningVisitors?.returning || 0
+  const trackedToday = identityStats?.returningVisitors?.trackedToday || 0
 
   const uploadPerVisitor = visitors ? uploads / visitors : 0
   const downloadPerVisitor = visitors ? downloads / visitors : 0
@@ -127,10 +206,12 @@ const buildAnalysis = ({ today, totals }) => {
   const risk = getRiskLevel(riskScore)
   const demandSignal = uploads >= 50 && downloads >= 20 && processSuccessRate >= 0.25
   const likelyBatch = uploadPerVisitor >= 20 || downloadPerVisitor >= 20 || zipShare >= 0.7 || batchSuccess >= 20
+    || (topVisitor && ((topVisitor.image_uploaded || 0) >= 50 || topVisitor.downloads >= 50))
   const shouldCharge = demandSignal && (likelyBatch || downloads >= processed)
+  const hasReturningSignal = returning > 0
 
   const summary = likelyBatch
-    ? '今天高度疑似存在批量放大/批量下载行为。当前数据只能确认“少量访客贡献大量处理量”，还不能确认是否为同一个用户。'
+    ? '今天高度疑似存在批量放大/批量下载行为。部署匿名明细统计后，可以继续观察是否集中在同一个 visitor。'
     : '今天暂未看到强烈批量使用迹象，更像普通免费试用或低频使用。'
 
   const recommendation = shouldCharge
@@ -141,6 +222,7 @@ const buildAnalysis = ({ today, totals }) => {
     `平均每位独立访客上传 ${uploadPerVisitor.toFixed(1)} 张，下载 ${downloadPerVisitor.toFixed(1)} 次。`,
     `ZIP 下载占今日下载 ${percent(zipDownloads, downloads)}，ZIP 数量为 ${formatNumber(zipDownloads)}。`,
     `今日上传到成功处理比例约 ${percent(processed, uploads)}，今日处理错误率 ${percent(errors, processed + errors)}。`,
+    `今日识别到 ${formatNumber(trackedToday)} 个匿名访客，其中 ${formatNumber(returning)} 个近 7 天曾来过。`,
     `累计处理错误率 ${percent(totalErrors, totalProcessed + totalErrors)}。`,
   ]
 
@@ -148,7 +230,7 @@ const buildAnalysis = ({ today, totals }) => {
     ? [
         '暂不取消免费，先把大批量任务放入慢速队列。',
         '未登录用户保留少量免费次数，ZIP 下载或批量处理提示注册。',
-        '后台增加 visitor_id / session_id 统计，确认是否为回头用户。',
+        hasReturningSignal ? '已有回头访客迹象，继续观察是否持续批量使用。' : '继续观察 visitor/session 明细，确认是否为回头用户。',
       ]
     : [
         '继续免费开放，避免过早打断种子用户。',
@@ -164,8 +246,44 @@ const buildAnalysis = ({ today, totals }) => {
     recommendation,
     risk,
     summary,
+    hasReturningSignal,
   }
 }
+
+const renderIdentityTable = (title, rows) => `
+  <section>
+    <div class="section-head">
+      <h2>${title}</h2>
+      <p>匿名 ID 已打码，只用于判断是否集中在少数用户。</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>匿名 ID</th>
+            <th>上传</th>
+            <th>处理成功</th>
+            <th>处理失败</th>
+            <th>下载</th>
+            <th>ZIP</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows.map((row) => `
+            <tr>
+              <td>${maskId(row.id)}</td>
+              <td><b>${formatNumber(row.image_uploaded)}</b></td>
+              <td><b>${formatNumber(row.processed)}</b></td>
+              <td>${formatNumber(row.errors)}</td>
+              <td><b>${formatNumber(row.downloads)}</b></td>
+              <td>${formatNumber(row.download_zip)}</td>
+            </tr>
+          `).join('') : '<tr><td colspan="6">部署后开始积累匿名明细；目前暂无可展示数据。</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  </section>
+`
 
 const renderAnalysis = (analysis) => `
   <section class="analysis-section">
@@ -174,7 +292,7 @@ const renderAnalysis = (analysis) => `
         <h2>每日分析报告</h2>
         <p>根据当前统计自动判断批量使用、需求信号和下一步动作。</p>
       </div>
-      <span class="risk-pill ${analysis.risk.className}">风险 ${analysis.risk.label}</span>
+      <span class="risk-pill ${analysis.risk.className}">资源风险 ${analysis.risk.label}</span>
     </div>
     <div class="analysis-grid">
       <article class="analysis-card">
@@ -188,9 +306,9 @@ const renderAnalysis = (analysis) => `
         <p>${analysis.recommendation}</p>
       </article>
       <article class="analysis-card">
-        <span>风险说明</span>
+        <span>资源风险说明</span>
         <strong>${analysis.risk.text}</strong>
-        <p>页面目前只有聚合统计，无法直接确认具体是哪一个用户。</p>
+        <p>${analysis.hasReturningSignal ? '已经看到回头访客迹象。' : '回头用户需要持续观察 2-7 天。'}</p>
       </article>
     </div>
     <div class="analysis-lists">
@@ -206,7 +324,7 @@ const renderAnalysis = (analysis) => `
   </section>
 `
 
-const renderStatsPage = ({ labels, totals, days, configured = true, message = '' }) => {
+const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured = true, message = '' }) => {
   const today = getToday(days)
   const downloadsToday = sumEvents(today, ['download', 'download_zip'])
   const downloadsTotal = sumEvents(totals, ['download', 'download_zip'])
@@ -216,7 +334,7 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
   const downloadMax = getMax(days, ['download', 'download_zip'])
   const visitMax = getMax(days, ['page_view'])
   const recentDays = [...days].reverse()
-  const analysis = buildAnalysis({ today, totals })
+  const analysis = buildAnalysis({ today, totals, identityStats })
 
   const metricCards = [
     { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
@@ -514,6 +632,10 @@ const renderStatsPage = ({ labels, totals, days, configured = true, message = ''
 
     ${renderAnalysis(analysis)}
 
+    ${renderIdentityTable('今日 Top 匿名访客', identityStats.visitors || [])}
+
+    ${renderIdentityTable('今日 Top 会话', identityStats.sessions || [])}
+
     <section>
       <div class="section-head">
         <h2>最近 30 天</h2>
@@ -599,9 +721,21 @@ export async function onRequestGet(context) {
     days.push({ day, ...values })
   }
 
+  const today = days[0]?.day
+  const identityStats = today ? {
+    returningVisitors: await getTodayReturningVisitors(kv, days),
+    sessions: await getIdentityStats(kv, 'session', today),
+    visitors: await getIdentityStats(kv, 'visitor', today),
+  } : {
+    returningVisitors: { returning: 0, trackedToday: 0 },
+    sessions: [],
+    visitors: [],
+  }
+
   const body = {
     ok: true,
     timezone: 'Asia/Shanghai',
+    identityStats,
     labels: LABELS,
     totals,
     days,
