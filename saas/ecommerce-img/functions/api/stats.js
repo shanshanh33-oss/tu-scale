@@ -18,14 +18,8 @@ const METRICS = [
   'unique_visitor',
 ]
 
-const MANUAL_DAY_MINIMUMS = {
-  '2026-06-30': {
-    page_view: 30,
-  },
-}
-
 const LABELS = {
-  page_view: '页面浏览',
+  page_view: '页面浏览事件',
   session_start: '访问会话',
   unique_visitor: '独立访客（6月28日起）',
   image_uploaded: '上传图片数',
@@ -418,10 +412,11 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
   const visitMax = getMax(days, ['page_view'])
   const recentDays = [...days].reverse()
   const analysis = buildAnalysis({ today, totals, identityStats })
+  const returningVisitors = identityStats?.returningVisitors?.returning || 0
 
   const metricCards = [
     { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
-    { label: '今天浏览', value: today.page_view, hint: `平均浏览 ${today.unique_visitor ? (today.page_view / today.unique_visitor).toFixed(1) : '0'} 次/人` },
+    { label: '今日回访访客', value: returningVisitors, hint: '近 7 天曾访问过' },
     { label: '今天上传', value: today.image_uploaded, hint: `处理成功 ${formatNumber(sumEvents(today, ['process_success', 'batch_item_success']))}` },
     { label: '今天导出图片', value: exportedToday, hint: `ZIP 内图片 ${formatNumber(today.download_zip)}` },
     { label: '累计独立访客', value: totals.unique_visitor, hint: `累计会话 ${formatNumber(totals.session_start)}` },
@@ -706,7 +701,7 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
     <header>
       <div>
         <h1>TU Scale 流量统计</h1>
-        <p>按北京时间统计，展示最近 30 天的访问、上传、处理和导出图片情况。</p>
+        <p>按北京时间统计。独立访客为匿名浏览器 ID 统计；旧页面浏览事件可能因 KV 非原子计数丢失。</p>
       </div>
       ${status}
     </header>
@@ -729,7 +724,7 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
           <thead>
             <tr>
               <th>日期</th>
-              <th>浏览</th>
+              <th>浏览事件（参考）</th>
               <th>独立访客</th>
               <th>访客粗略值</th>
               <th>上传图片</th>
@@ -762,7 +757,7 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
       </div>
     </section>
 
-    <p class="note">口径说明：ZIP 数值表示 ZIP 包内导出的图片数量，不是点击 ZIP 按钮的次数。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。需要原始数据可打开 <a href="?format=json">JSON 版本</a>。</p>
+    <p class="note">口径说明：准确来访量以“独立访客”为准；页面浏览事件在旧版本中使用非原子 KV 计数，历史值可能低估且无法精确还原。ZIP 数值表示 ZIP 包内导出的图片数量，不是点击 ZIP 按钮的次数。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。需要原始数据可打开 <a href="?format=json">JSON 版本</a>。</p>
   </main>
 </body>
 </html>`
@@ -806,7 +801,7 @@ export async function onRequestGet(context) {
       getEventLogStats(kv, day),
       getIdentityTotals(kv, 'visitor', day),
     ])
-    const values = mergeMetricMaximums(counterValues, visitorTotals, eventLogStats.totals, MANUAL_DAY_MINIMUMS[day])
+    const values = mergeMetricMaximums(counterValues, visitorTotals, eventLogStats.totals)
     eventLogStatsByDay[day] = eventLogStats
     days.push({ day, ...values })
   }
