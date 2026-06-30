@@ -15,6 +15,7 @@ const ALLOWED_EVENTS = new Set([
 
 const ID_PATTERN = /^[a-z]_[a-zA-Z0-9-]{8,80}$/
 const EVENT_LOG_TTL = 60 * 60 * 24 * 60
+const ALLOWED_TOOLS = new Set(['upscale', 'converter'])
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -53,12 +54,15 @@ const countUniqueVisitor = async (kv, visitorId, day) => {
   ])
 }
 
-const writeEventLog = async (kv, { day, event, amount, visitorId, sessionId }) => {
+const normalizeTool = (tool) => ALLOWED_TOOLS.has(tool) ? tool : 'unknown'
+
+const writeEventLog = async (kv, { day, event, amount, visitorId, sessionId, tool }) => {
   const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
   const key = `event:${day}:${Date.now()}:${id}`
   await kv.put(key, JSON.stringify({
     event,
     amount,
+    tool: normalizeTool(tool),
     visitorId: ID_PATTERN.test(visitorId) ? visitorId : '',
     sessionId: ID_PATTERN.test(sessionId) ? sessionId : '',
   }), { expirationTtl: EVENT_LOG_TTL })
@@ -83,9 +87,10 @@ export async function onRequestPost(context) {
   const day = getChinaDate()
   const visitorId = String(body?.data?.visitorId || '').trim()
   const sessionId = String(body?.data?.sessionId || '').trim()
+  const tool = normalizeTool(String(body?.data?.tool || '').trim())
 
   await Promise.all([
-    writeEventLog(kv, { day, event, amount, visitorId, sessionId }),
+    writeEventLog(kv, { day, event, amount, visitorId, sessionId, tool }),
     addCount(kv, `total:${event}`, amount),
     addCount(kv, `day:${day}:${event}`, amount),
     countUniqueVisitor(kv, visitorId, day),

@@ -18,6 +18,14 @@ const METRICS = [
   'unique_visitor',
 ]
 
+const TOOLS = ['upscale', 'converter', 'unknown']
+
+const TOOL_LABELS = {
+  upscale: '图片放大',
+  converter: '格式转换',
+  unknown: '未细分旧数据',
+}
+
 const LABELS = {
   page_view: '页面浏览事件',
   session_start: '访问会话',
@@ -74,6 +82,8 @@ const readKvList = async (kv, prefix) => {
 
 const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]))
 
+const createToolBreakdown = () => Object.fromEntries(TOOLS.map((tool) => [tool, createEmptyMetrics()]))
+
 const formatNumber = (value) => new Intl.NumberFormat('zh-CN').format(value || 0)
 
 const getToday = (days) => days[0] || {}
@@ -100,39 +110,16 @@ const renderBar = (value, max) => {
   return `<div class="bar" aria-label="${formatNumber(value)}"><i style="width:${width}%"></i></div>`
 }
 
-const maskId = (id) => {
-  if (!id) return '-'
-  const prefix = id.slice(0, 2)
-  const tail = id.slice(-6)
-  return `${prefix}...${tail}`
+const addToolEvent = (toolStats, tool, event, amount) => {
+  const key = TOOLS.includes(tool) ? tool : 'unknown'
+  toolStats[key][event] += amount
 }
-
-const addIdentityRecord = (records, id, event, amount) => {
-  if (!id || !EVENTS.includes(event)) return
-  const current = records.get(id) || { id }
-  current[event] = (current[event] || 0) + amount
-  records.set(id, current)
-}
-
-const normalizeIdentityRows = (records) => [...records.values()].map((record) => {
-  const processed = sumEvents(record, ['process_success', 'batch_item_success'])
-  const errors = sumEvents(record, ['process_error', 'batch_item_error'])
-  const exportedImages = sumEvents(record, ['download', 'download_zip'])
-  const score = (record.image_uploaded || 0) + processed + exportedImages
-  return {
-    ...record,
-    exportedImages,
-    errors,
-    processed,
-    score,
-  }
-}).sort((a, b) => b.score - a.score)
 
 const getEventLogStats = async (kv, day) => {
   const keys = await readKvList(kv, `event:${day}:`)
   const totals = createEmptyMetrics()
-  const visitors = new Map()
-  const sessions = new Map()
+  const tools = createToolBreakdown()
+  const toolVisitors = Object.fromEntries(TOOLS.map((tool) => [tool, new Set()]))
   const uniqueVisitors = new Set()
 
   await Promise.all(keys.map(async ({ name }) => {
@@ -147,23 +134,26 @@ const getEventLogStats = async (kv, day) => {
     if (!EVENTS.includes(event)) return
     const amount = Math.max(1, Number.parseInt(record.amount || '1', 10) || 1)
     const visitorId = String(record.visitorId || '')
-    const sessionId = String(record.sessionId || '')
+    const tool = String(record.tool || 'unknown')
 
     totals[event] += amount
+    addToolEvent(tools, tool, event, amount)
     if (visitorId) {
       uniqueVisitors.add(visitorId)
-      addIdentityRecord(visitors, visitorId, event, amount)
+      const toolKey = TOOLS.includes(tool) ? tool : 'unknown'
+      toolVisitors[toolKey].add(visitorId)
     }
-    if (sessionId) addIdentityRecord(sessions, sessionId, event, amount)
   }))
 
   totals.unique_visitor = uniqueVisitors.size
+  TOOLS.forEach((tool) => {
+    tools[tool].unique_visitor = toolVisitors[tool].size
+  })
 
   return {
     hasLogs: keys.length > 0,
-    sessions: normalizeIdentityRows(sessions).slice(0, 8),
     totals,
-    visitors: normalizeIdentityRows(visitors).slice(0, 8),
+    tools,
   }
 }
 
@@ -196,25 +186,6 @@ const mergeMetricMaximums = (...sources) => {
   return merged
 }
 
-const getIdentityStats = async (kv, type, day) => {
-  const prefix = `${type}:day:${day}:`
-  const keys = await readKvList(kv, prefix)
-  const records = new Map()
-
-  await Promise.all(keys.map(async ({ name }) => {
-    const rest = name.slice(prefix.length)
-    const parts = rest.split(':')
-    if (parts.length !== 2) return
-    const [id, event] = parts
-    if (!EVENTS.includes(event)) return
-    const current = records.get(id) || { id }
-    current[event] = await readCount(kv, name)
-    records.set(id, current)
-  }))
-
-  return normalizeIdentityRows(records).slice(0, 8)
-}
-
 const getTodayReturningVisitors = async (kv, days) => {
   const today = days[0]?.day
   if (!today) return { returning: 0, trackedToday: 0 }
@@ -240,168 +211,7 @@ const getTodayReturningVisitors = async (kv, days) => {
   }
 }
 
-const getRiskLevel = (score) => {
-  if (score >= 7) return { label: '高', className: 'high', text: '存在明显批量使用迹象，免费资源和未来 API 成本容易被少数用户快速消耗。' }
-  if (score >= 4) return { label: '中', className: 'medium', text: '有批量使用迹象，建议继续观察并限制超大任务。' }
-  return { label: '低', className: 'low', text: '目前更像正常试用，可以继续免费观察。' }
-}
-
-const buildAnalysis = ({ today, totals, identityStats }) => {
-  const visitors = today.unique_visitor || 0
-  const uploads = today.image_uploaded || 0
-  const processed = sumEvents(today, ['process_success', 'batch_item_success'])
-  const errors = sumEvents(today, ['process_error', 'batch_item_error'])
-  const exportedImages = sumEvents(today, ['download', 'download_zip'])
-  const zipExportedImages = today.download_zip || 0
-  const batchSuccess = today.batch_item_success || 0
-  const totalProcessed = sumEvents(totals, ['process_success', 'batch_item_success'])
-  const totalErrors = sumEvents(totals, ['process_error', 'batch_item_error'])
-  const topVisitor = identityStats?.visitors?.[0]
-  const returning = identityStats?.returningVisitors?.returning || 0
-  const trackedToday = identityStats?.returningVisitors?.trackedToday || 0
-
-  const uploadPerVisitor = visitors ? uploads / visitors : 0
-  const exportPerVisitor = visitors ? exportedImages / visitors : 0
-  const zipShare = exportedImages ? zipExportedImages / exportedImages : 0
-  const processSuccessRate = uploads ? processed / uploads : 0
-
-  let riskScore = 0
-  if (uploadPerVisitor >= 50) riskScore += 3
-  else if (uploadPerVisitor >= 20) riskScore += 2
-  else if (uploadPerVisitor >= 8) riskScore += 1
-
-  if (exportPerVisitor >= 50) riskScore += 3
-  else if (exportPerVisitor >= 20) riskScore += 2
-  else if (exportPerVisitor >= 8) riskScore += 1
-
-  if (zipShare >= 0.8 && zipExportedImages >= 20) riskScore += 2
-  else if (zipShare >= 0.5 && zipExportedImages >= 10) riskScore += 1
-
-  if (batchSuccess >= 50) riskScore += 2
-  else if (batchSuccess >= 10) riskScore += 1
-
-  const risk = getRiskLevel(riskScore)
-  const demandSignal = uploads >= 50 && exportedImages >= 20 && processSuccessRate >= 0.25
-  const likelyBatch = uploadPerVisitor >= 20 || exportPerVisitor >= 20 || zipShare >= 0.7 || batchSuccess >= 20
-    || (topVisitor && ((topVisitor.image_uploaded || 0) >= 50 || topVisitor.exportedImages >= 50))
-  const shouldCharge = demandSignal && (likelyBatch || exportedImages >= processed)
-  const hasReturningSignal = returning > 0
-
-  const summary = likelyBatch
-    ? '今天高度疑似存在批量放大/批量导出行为。部署匿名明细统计后，可以继续观察是否集中在同一个 visitor。'
-    : '今天暂未看到强烈批量使用迹象，更像普通免费试用或低频使用。'
-
-  const recommendation = shouldCharge
-    ? '保留免费入口，但建议尽快上线软限制：未登录每日少量免费，批量 ZIP、优先队列和更高额度引导注册或积分。'
-    : '继续免费观察，同时补充 visitor/session 维度统计，为后续判断回头用户和真实付费意愿做准备。'
-
-  const facts = [
-    `平均每位独立访客上传 ${uploadPerVisitor.toFixed(1)} 张，导出 ${exportPerVisitor.toFixed(1)} 张。`,
-    `ZIP 导出图片占今日导出图片 ${percent(zipExportedImages, exportedImages)}，ZIP 内图片数为 ${formatNumber(zipExportedImages)}。`,
-    `今日上传到成功处理比例约 ${percent(processed, uploads)}，今日处理错误率 ${percent(errors, processed + errors)}。`,
-    `今日识别到 ${formatNumber(trackedToday)} 个匿名访客，其中 ${formatNumber(returning)} 个近 7 天曾来过。`,
-    `累计处理错误率 ${percent(totalErrors, totalProcessed + totalErrors)}。`,
-  ]
-
-  const nextActions = shouldCharge
-    ? [
-        '暂不取消免费，先把大批量任务放入慢速队列。',
-        '未登录用户保留少量免费次数，ZIP 导出或批量处理提示注册。',
-        hasReturningSignal ? '已有回头访客迹象，继续观察是否持续批量使用。' : '继续观察 visitor/session 明细，确认是否为回头用户。',
-      ]
-    : [
-        '继续免费开放，避免过早打断种子用户。',
-        '先记录单个 visitor 的上传、处理、ZIP 导出图片数和隔日回访。',
-        '如果连续 2-3 天出现高上传/高 ZIP，再开启软限制。',
-      ]
-
-  return {
-    demandSignal,
-    facts,
-    likelyBatch,
-    nextActions,
-    recommendation,
-    risk,
-    summary,
-    hasReturningSignal,
-  }
-}
-
-const renderIdentityTable = (title, rows) => `
-  <section>
-    <div class="section-head">
-      <h2>${title}</h2>
-      <p>匿名 ID 已打码，只用于判断是否集中在少数用户。</p>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>匿名 ID</th>
-            <th>上传</th>
-            <th>处理成功</th>
-            <th>处理失败</th>
-            <th>导出图片</th>
-            <th>ZIP 内图片</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.length ? rows.map((row) => `
-            <tr>
-              <td>${maskId(row.id)}</td>
-              <td><b>${formatNumber(row.image_uploaded)}</b></td>
-              <td><b>${formatNumber(row.processed)}</b></td>
-              <td>${formatNumber(row.errors)}</td>
-              <td><b>${formatNumber(row.exportedImages)}</b></td>
-              <td>${formatNumber(row.download_zip)}</td>
-            </tr>
-          `).join('') : '<tr><td colspan="6">部署后开始积累匿名明细；目前暂无可展示数据。</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </section>
-`
-
-const renderAnalysis = (analysis) => `
-  <section class="analysis-section">
-    <div class="section-head">
-      <div>
-        <h2>每日分析报告</h2>
-        <p>根据当前统计自动判断批量使用、需求信号和下一步动作。</p>
-      </div>
-      <span class="risk-pill ${analysis.risk.className}">资源风险 ${analysis.risk.label}</span>
-    </div>
-    <div class="analysis-grid">
-      <article class="analysis-card">
-        <span>批量使用判断</span>
-        <strong>${analysis.likelyBatch ? '疑似批量使用' : '暂未明显异常'}</strong>
-        <p>${analysis.summary}</p>
-      </article>
-      <article class="analysis-card">
-        <span>需求信号</span>
-        <strong>${analysis.demandSignal ? '有付费验证价值' : '继续观察'}</strong>
-        <p>${analysis.recommendation}</p>
-      </article>
-      <article class="analysis-card">
-        <span>资源风险说明</span>
-        <strong>${analysis.risk.text}</strong>
-        <p>${analysis.hasReturningSignal ? '已经看到回头访客迹象。' : '回头用户需要持续观察 2-7 天。'}</p>
-      </article>
-    </div>
-    <div class="analysis-lists">
-      <div>
-        <h3>关键依据</h3>
-        <ul>${analysis.facts.map((item) => `<li>${item}</li>`).join('')}</ul>
-      </div>
-      <div>
-        <h3>建议动作</h3>
-        <ul>${analysis.nextActions.map((item) => `<li>${item}</li>`).join('')}</ul>
-      </div>
-    </div>
-  </section>
-`
-
-const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured = true, message = '' }) => {
+const renderStatsPage = ({ labels, totals, days, returningVisitors = { returning: 0 }, toolBreakdown = {}, configured = true, message = '' }) => {
   const today = getToday(days)
   const exportedToday = sumEvents(today, ['download', 'download_zip'])
   const exportedTotal = sumEvents(totals, ['download', 'download_zip'])
@@ -411,12 +221,11 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
   const exportMax = getMax(days, ['download', 'download_zip'])
   const visitMax = getMax(days, ['page_view'])
   const recentDays = [...days].reverse()
-  const analysis = buildAnalysis({ today, totals, identityStats })
-  const returningVisitors = identityStats?.returningVisitors?.returning || 0
+  const returningCount = returningVisitors?.returning || 0
 
   const metricCards = [
     { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
-    { label: '今日回访访客', value: returningVisitors, hint: '近 7 天曾访问过' },
+    { label: '今日回访访客', value: returningCount, hint: '近 7 天曾访问过' },
     { label: '今天上传', value: today.image_uploaded, hint: `处理成功 ${formatNumber(sumEvents(today, ['process_success', 'batch_item_success']))}` },
     { label: '今天导出图片', value: exportedToday, hint: `ZIP 内图片 ${formatNumber(today.download_zip)}` },
     { label: '累计独立访客', value: totals.unique_visitor, hint: `累计会话 ${formatNumber(totals.session_start)}` },
@@ -448,6 +257,26 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
       <td>${formatNumber(today[event])}</td>
     </tr>
   `).join('')
+
+  const toolRows = ['upscale', 'converter'].map((tool) => {
+    const total = toolBreakdown?.totals?.[tool] || createEmptyMetrics()
+    const todayValue = toolBreakdown?.today?.[tool] || createEmptyMetrics()
+    const totalProcessed = sumEvents(total, ['process_success', 'batch_item_success'])
+    const todayProcessed = sumEvents(todayValue, ['process_success', 'batch_item_success'])
+    const totalExported = sumEvents(total, ['download', 'download_zip'])
+    const todayExported = sumEvents(todayValue, ['download', 'download_zip'])
+
+    return `
+      <tr>
+        <td><b>${TOOL_LABELS[tool]}</b></td>
+        <td>${formatNumber(total.unique_visitor)}</td>
+        <td>${formatNumber(todayValue.unique_visitor)}</td>
+        <td>${formatNumber(total.image_uploaded)} / ${formatNumber(todayValue.image_uploaded)}</td>
+        <td>${formatNumber(totalProcessed)} / ${formatNumber(todayProcessed)}</td>
+        <td>${formatNumber(totalExported)} / ${formatNumber(todayExported)}</td>
+      </tr>
+    `
+  }).join('')
 
   const status = configured
     ? '<span class="status ok">统计正常</span>'
@@ -604,83 +433,6 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
       font-size: 13px;
       color: var(--muted);
     }
-    .analysis-section {
-      border-color: #d8e6ff;
-    }
-    .risk-pill {
-      display: inline-flex;
-      align-items: center;
-      min-height: 32px;
-      padding: 0 12px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 650;
-      white-space: nowrap;
-    }
-    .risk-pill.low {
-      color: #0f7a55;
-      background: #edfdf6;
-      border: 1px solid #bdebd8;
-    }
-    .risk-pill.medium {
-      color: #9a5a00;
-      background: #fff7e6;
-      border: 1px solid #f3d49a;
-    }
-    .risk-pill.high {
-      color: #b42318;
-      background: #fff1f0;
-      border: 1px solid #ffccc7;
-    }
-    .analysis-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      padding: 18px;
-    }
-    .analysis-card {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
-      background: #fbfcfd;
-    }
-    .analysis-card span {
-      display: block;
-      color: var(--muted);
-      font-size: 13px;
-      margin-bottom: 6px;
-    }
-    .analysis-card strong {
-      display: block;
-      margin-bottom: 8px;
-      font-size: 18px;
-      line-height: 1.35;
-    }
-    .analysis-card p {
-      font-size: 14px;
-    }
-    .analysis-lists {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 18px;
-      padding: 0 18px 18px;
-    }
-    .analysis-lists > div {
-      border-top: 1px solid var(--line);
-      padding-top: 14px;
-    }
-    h3 {
-      margin: 0 0 8px;
-      font-size: 15px;
-    }
-    ul {
-      margin: 0;
-      padding-left: 20px;
-      color: var(--muted);
-    }
-    li + li {
-      margin-top: 6px;
-    }
     @media (max-width: 760px) {
       main { width: min(100% - 24px, 1120px); padding-top: 22px; }
       header { display: block; }
@@ -689,9 +441,6 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
       .metric-card { padding: 16px; }
       .section-head { display: block; }
       .section-head p { margin-top: 4px; }
-      .risk-pill { margin-top: 12px; }
-      .analysis-grid,
-      .analysis-lists { grid-template-columns: 1fr; }
       th, td { padding: 11px 14px; }
     }
   </style>
@@ -708,16 +457,32 @@ const renderStatsPage = ({ labels, totals, days, identityStats = {}, configured 
 
     <div class="metrics">${metricCards}</div>
 
-    ${renderAnalysis(analysis)}
-
-    ${renderIdentityTable('今日 Top 匿名访客', identityStats.visitors || [])}
-
-    ${renderIdentityTable('今日 Top 会话', identityStats.sessions || [])}
+    <section>
+      <div class="section-head">
+        <h2>功能使用情况</h2>
+        <p>按图片放大和格式转换拆分；此表只使用新事件日志，部署后开始准确细分。</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>功能</th>
+              <th>累计独立访客</th>
+              <th>今日独立访客</th>
+              <th>上传 累计/今日</th>
+              <th>成功 累计/今日</th>
+              <th>导出 累计/今日</th>
+            </tr>
+          </thead>
+          <tbody>${toolRows}</tbody>
+        </table>
+      </div>
+    </section>
 
     <section>
       <div class="section-head">
         <h2>最近 30 天</h2>
-        <p>横条越长，代表当天数值越高。</p>
+        <p>独立访客是全站去重来访；浏览事件仅作参考。</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -807,9 +572,16 @@ export async function onRequestGet(context) {
   }
 
   const dayTotals = createEmptyMetrics()
+  const toolTotals = createToolBreakdown()
   days.forEach((day) => {
     METRICS.forEach((metric) => {
       dayTotals[metric] += day[metric] || 0
+    })
+    const dayTools = eventLogStatsByDay[day.day]?.tools || createToolBreakdown()
+    TOOLS.forEach((tool) => {
+      METRICS.forEach((metric) => {
+        toolTotals[tool][metric] += dayTools[tool]?.[metric] || 0
+      })
     })
   })
 
@@ -818,26 +590,19 @@ export async function onRequestGet(context) {
   totals.unique_visitor = Math.max(counterTotals.unique_visitor || 0, totalVisitorKeys.length)
 
   const today = days[0]?.day
-  const [counterSessions, counterVisitors, returningVisitors] = today ? await Promise.all([
-    getIdentityStats(kv, 'session', today),
-    getIdentityStats(kv, 'visitor', today),
-    getTodayReturningVisitors(kv, days),
-  ]) : [[], [], { returning: 0, trackedToday: 0 }]
-
-  const identityStats = today ? {
-    returningVisitors,
-    sessions: counterSessions,
-    visitors: counterVisitors,
-  } : {
-    returningVisitors: { returning: 0, trackedToday: 0 },
-    sessions: [],
-    visitors: [],
+  const returningVisitors = today ? await getTodayReturningVisitors(kv, days) : { returning: 0, trackedToday: 0 }
+  const toolBreakdown = {
+    labels: TOOL_LABELS,
+    note: '功能细分只统计带 tool 字段的新事件日志；旧事件无法准确反推属于图片放大还是格式转换。',
+    today: today ? eventLogStatsByDay[today]?.tools || createToolBreakdown() : createToolBreakdown(),
+    totals: toolTotals,
   }
 
   const body = {
     ok: true,
     timezone: 'Asia/Shanghai',
-    identityStats,
+    returningVisitors,
+    toolBreakdown,
     labels: LABELS,
     totals,
     days,

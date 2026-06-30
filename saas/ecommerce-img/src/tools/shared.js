@@ -42,6 +42,67 @@ export const revokeObjectUrl = (url) => {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
 
+const ANALYTICS_VISITOR_KEY = 'tuscale_visitor_id'
+const ANALYTICS_SESSION_KEY = 'tuscale_session_id'
+
+const createAnalyticsId = (prefix) => {
+  const random = crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  return `${prefix}_${random}`
+}
+
+const getStoredAnalyticsId = (storage, key, prefix) => {
+  let value = storage.getItem(key)
+  if (!value) {
+    value = createAnalyticsId(prefix)
+    storage.setItem(key, value)
+  }
+  return value
+}
+
+const getAnalyticsIdentity = () => {
+  if (typeof window === 'undefined') return {}
+  try {
+    return {
+      visitorId: getStoredAnalyticsId(localStorage, ANALYTICS_VISITOR_KEY, 'v'),
+      sessionId: getStoredAnalyticsId(sessionStorage, ANALYTICS_SESSION_KEY, 's'),
+    }
+  } catch {
+    return {}
+  }
+}
+
+const inferTool = () => {
+  if (typeof window === 'undefined') return 'unknown'
+  return window.location.pathname === '/format-converter' ? 'converter' : 'upscale'
+}
+
+export const trackEvent = (event, data = {}) => {
+  if (typeof window === 'undefined') return
+  const payload = JSON.stringify({
+    event,
+    data: {
+      tool: inferTool(),
+      ...data,
+      ...getAnalyticsIdentity(),
+    },
+  })
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload], { type: 'application/json' })
+      navigator.sendBeacon('/api/track', blob)
+      return
+    }
+    fetch('/api/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+    }).catch(() => {})
+  } catch {
+    // Analytics should never interrupt image processing.
+  }
+}
+
 export const fitSize = (sourceW, sourceH, targetW, targetH, mode = 'contain', focus = 'center') => {
   const focusMap = {
     top: { x: 0.5, y: 0 },

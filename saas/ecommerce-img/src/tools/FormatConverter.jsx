@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle, Copy, Download, FileDown, FolderOpen, Image as ImageIcon, Loader2, RefreshCw, Upload, X } from 'lucide-react'
 import JSZip from 'jszip'
-import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, revokeObjectUrl } from './shared'
+import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, revokeObjectUrl, trackEvent } from './shared'
 import RewardButton from './RewardButton'
 
 const OUTPUTS = [
@@ -56,6 +56,7 @@ export default function FormatConverter({ navigate }) {
   const addFiles = useCallback(async (fileList) => {
     const imageFiles = Array.from(fileList || []).filter(file => file.type.startsWith('image/') || /\.(jpg|jpeg|jfif|png|webp|gif|bmp|svg|avif|ico|heic|heif|tif|tiff)$/i.test(file.name))
     if (imageFiles.length === 0) return
+    trackEvent('image_uploaded', { tool: 'converter', mode: 'converter', count: imageFiles.length })
 
     const incoming = imageFiles.map(file => ({
       id: ++converterId,
@@ -159,6 +160,7 @@ export default function FormatConverter({ navigate }) {
 
     setProcessing(true)
     setMessage('')
+    trackEvent('process_start', { tool: 'converter', mode: 'converter', count: ready.length, format })
 
     for (const item of ready) {
       setItems(prev => prev.map(current => current.id === item.id ? { ...current, status: 'processing', error: '' } : current))
@@ -169,11 +171,13 @@ export default function FormatConverter({ navigate }) {
           revokeObjectUrl(current.url)
           return { ...current, status: 'done', blob: result.blob, url: result.url, size: result.size }
         }))
+        trackEvent('process_success', { tool: 'converter', mode: 'converter', format })
       } catch {
         setItems(prev => prev.map(current => current.id === item.id
           ? { ...current, status: 'error', error: '转换失败，请换一种输出格式' }
           : current
         ))
+        trackEvent('process_error', { tool: 'converter', mode: 'converter', format })
       }
     }
 
@@ -182,11 +186,13 @@ export default function FormatConverter({ navigate }) {
 
   const downloadOne = (item) => {
     if (!item.blob) return
+    trackEvent('download', { tool: 'converter', mode: 'converter_single', format })
     downloadBlob(item.blob, `${getBaseName(item.file.name)}.${output.ext}`)
   }
 
   const downloadZip = async () => {
     if (doneItems.length === 0) return
+    trackEvent('download_zip', { tool: 'converter', count: doneItems.length, format })
     const zip = new JSZip()
     doneItems.forEach(item => {
       zip.file(`${getBaseName(item.file.name)}.${output.ext}`, item.blob)

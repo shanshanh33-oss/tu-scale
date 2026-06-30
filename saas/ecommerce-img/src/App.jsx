@@ -5,6 +5,7 @@ import { loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
 import FormatConverter from './tools/FormatConverter'
 import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
+import { trackEvent } from './tools/shared'
 
 const QUALITY_PRESETS = [
   { edge: 1080, label: '1080级', desc: '最长边 1080px' },
@@ -131,55 +132,6 @@ const resizeCropRect = (rect, dx, dy, ratio = null) => {
     y: rect.y,
     w: nextW,
     h: nextW / ratio,
-  }
-}
-
-const ANALYTICS_VISITOR_KEY = 'tuscale_visitor_id'
-const ANALYTICS_SESSION_KEY = 'tuscale_session_id'
-
-const createAnalyticsId = (prefix) => {
-  const random = crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-  return `${prefix}_${random}`
-}
-
-const getStoredAnalyticsId = (storage, key, prefix) => {
-  let value = storage.getItem(key)
-  if (!value) {
-    value = createAnalyticsId(prefix)
-    storage.setItem(key, value)
-  }
-  return value
-}
-
-const getAnalyticsIdentity = () => {
-  if (typeof window === 'undefined') return {}
-  try {
-    return {
-      visitorId: getStoredAnalyticsId(localStorage, ANALYTICS_VISITOR_KEY, 'v'),
-      sessionId: getStoredAnalyticsId(sessionStorage, ANALYTICS_SESSION_KEY, 's'),
-    }
-  } catch {
-    return {}
-  }
-}
-
-const trackEvent = (event, data = {}) => {
-  if (typeof window === 'undefined') return
-  const payload = JSON.stringify({ event, data: { ...data, ...getAnalyticsIdentity() } })
-  try {
-    if (navigator.sendBeacon) {
-      const blob = new Blob([payload], { type: 'application/json' })
-      navigator.sendBeacon('/api/track', blob)
-      return
-    }
-    fetch('/api/track', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload,
-      keepalive: true,
-    }).catch(() => {})
-  } catch {
-    // Analytics should never interrupt image processing.
   }
 }
 
