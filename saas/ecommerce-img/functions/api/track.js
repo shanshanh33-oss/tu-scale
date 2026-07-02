@@ -54,6 +54,24 @@ const countUniqueVisitor = async (kv, visitorId, day) => {
   ])
 }
 
+const countToolEvent = async (kv, tool, event, day, amount) => {
+  const normalizedTool = normalizeTool(tool)
+  if (normalizedTool === 'unknown') return
+  await Promise.all([
+    addCount(kv, `tool:${normalizedTool}:total:${event}`, amount),
+    addCount(kv, `tool:${normalizedTool}:day:${day}:${event}`, amount),
+  ])
+}
+
+const countToolVisitor = async (kv, tool, visitorId, day) => {
+  const normalizedTool = normalizeTool(tool)
+  if (normalizedTool === 'unknown' || !ID_PATTERN.test(visitorId)) return
+  await Promise.all([
+    kv.put(`tool:${normalizedTool}:visitor:total:${visitorId}`, '1'),
+    kv.put(`tool:${normalizedTool}:visitor:day:${day}:${visitorId}`, '1', { expirationTtl: EVENT_LOG_TTL }),
+  ])
+}
+
 const normalizeTool = (tool) => ALLOWED_TOOLS.has(tool) ? tool : 'unknown'
 
 const writeEventLog = async (kv, { day, event, amount, visitorId, sessionId, tool }) => {
@@ -94,6 +112,8 @@ export async function onRequestPost(context) {
     addCount(kv, `total:${event}`, amount),
     addCount(kv, `day:${day}:${event}`, amount),
     countUniqueVisitor(kv, visitorId, day),
+    countToolEvent(kv, tool, event, day, amount),
+    countToolVisitor(kv, tool, visitorId, day),
     countIdentityEvent(kv, 'visitor', visitorId, day, event, amount),
     countIdentityEvent(kv, 'session', sessionId, day, event, amount),
   ])

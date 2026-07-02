@@ -110,53 +110,6 @@ const renderBar = (value, max) => {
   return `<div class="bar" aria-label="${formatNumber(value)}"><i style="width:${width}%"></i></div>`
 }
 
-const addToolEvent = (toolStats, tool, event, amount) => {
-  const key = TOOLS.includes(tool) ? tool : 'unknown'
-  toolStats[key][event] += amount
-}
-
-const getEventLogStats = async (kv, day) => {
-  const keys = await readKvList(kv, `event:${day}:`)
-  const totals = createEmptyMetrics()
-  const tools = createToolBreakdown()
-  const toolVisitors = Object.fromEntries(TOOLS.map((tool) => [tool, new Set()]))
-  const uniqueVisitors = new Set()
-
-  await Promise.all(keys.map(async ({ name }) => {
-    let record
-    try {
-      record = JSON.parse(await kv.get(name) || '{}')
-    } catch {
-      return
-    }
-
-    const event = String(record.event || '')
-    if (!EVENTS.includes(event)) return
-    const amount = Math.max(1, Number.parseInt(record.amount || '1', 10) || 1)
-    const visitorId = String(record.visitorId || '')
-    const tool = String(record.tool || 'unknown')
-
-    totals[event] += amount
-    addToolEvent(tools, tool, event, amount)
-    if (visitorId) {
-      uniqueVisitors.add(visitorId)
-      const toolKey = TOOLS.includes(tool) ? tool : 'unknown'
-      toolVisitors[toolKey].add(visitorId)
-    }
-  }))
-
-  totals.unique_visitor = uniqueVisitors.size
-  TOOLS.forEach((tool) => {
-    tools[tool].unique_visitor = toolVisitors[tool].size
-  })
-
-  return {
-    hasLogs: keys.length > 0,
-    totals,
-    tools,
-  }
-}
-
 const getIdentityTotals = async (kv, type, day) => {
   const prefix = `${type}:day:${day}:`
   const keys = await readKvList(kv, prefix)
@@ -176,6 +129,26 @@ const getIdentityTotals = async (kv, type, day) => {
 
   if (type === 'visitor') totals.unique_visitor = ids.size
   return totals
+}
+
+const getToolMetrics = async (kv, scope, day = '') => {
+  const tools = createToolBreakdown()
+
+  await Promise.all(TOOLS.filter((tool) => tool !== 'unknown').map(async (tool) => {
+    await Promise.all(EVENTS.map(async (event) => {
+      const key = scope === 'day'
+        ? `tool:${tool}:day:${day}:${event}`
+        : `tool:${tool}:total:${event}`
+      tools[tool][event] = await readCount(kv, key)
+    }))
+
+    const visitorPrefix = scope === 'day'
+      ? `tool:${tool}:visitor:day:${day}:`
+      : `tool:${tool}:visitor:total:`
+    tools[tool].unique_visitor = (await readKvList(kv, visitorPrefix)).length
+  }))
+
+  return tools
 }
 
 const mergeMetricMaximums = (...sources) => {
@@ -555,33 +528,21 @@ export async function onRequestGet(context) {
   }))
 
   const days = []
-  const eventLogStatsByDay = {}
   for (let i = 0; i < 30; i++) {
     const day = getChinaDate(i)
     const counterValues = {}
     await Promise.all(METRICS.map(async (metric) => {
       counterValues[metric] = await readCount(kv, `day:${day}:${metric}`)
     }))
-    const [eventLogStats, visitorTotals] = await Promise.all([
-      getEventLogStats(kv, day),
-      getIdentityTotals(kv, 'visitor', day),
-    ])
-    const values = mergeMetricMaximums(counterValues, visitorTotals, eventLogStats.totals)
-    eventLogStatsByDay[day] = eventLogStats
+    const visitorTotals = await getIdentityTotals(kv, 'visitor', day)
+    const values = mergeMetricMaximums(counterValues, visitorTotals)
     days.push({ day, ...values })
   }
 
   const dayTotals = createEmptyMetrics()
-  const toolTotals = createToolBreakdown()
   days.forEach((day) => {
     METRICS.forEach((metric) => {
       dayTotals[metric] += day[metric] || 0
-    })
-    const dayTools = eventLogStatsByDay[day.day]?.tools || createToolBreakdown()
-    TOOLS.forEach((tool) => {
-      METRICS.forEach((metric) => {
-        toolTotals[tool][metric] += dayTools[tool]?.[metric] || 0
-      })
     })
   })
 
@@ -590,12 +551,20 @@ export async function onRequestGet(context) {
   totals.unique_visitor = Math.max(counterTotals.unique_visitor || 0, totalVisitorKeys.length)
 
   const today = days[0]?.day
-  const returningVisitors = today ? await getTodayReturningVisitors(kv, days) : { returning: 0, trackedToday: 0 }
+  const [returningVisitors, todayTools, totalTools] = today ? await Promise.all([
+    getTodayReturningVisitors(kv, days),
+    getToolMetrics(kv, 'day', today),
+    getToolMetrics(kv, 'total'),
+  ]) : [
+    { returning: 0, trackedToday: 0 },
+    createToolBreakdown(),
+    createToolBreakdown(),
+  ]
   const toolBreakdown = {
     labels: TOOL_LABELS,
-    note: '功能细分只统计带 tool 字段的新事件日志；旧事件无法准确反推属于图片放大还是格式转换。',
-    today: today ? eventLogStatsByDay[today]?.tools || createToolBreakdown() : createToolBreakdown(),
-    totals: toolTotals,
+    note: '功能细分从 2026-07-02 起使用轻量计数器统计；更早事件无法准确反推属于图片放大还是格式转换。',
+    today: todayTools,
+    totals: totalTools,
   }
 
   const body = {
