@@ -69,17 +69,6 @@ const readCount = async (kv, key) => {
   return Number.isFinite(count) ? count : 0
 }
 
-const readKvList = async (kv, prefix) => {
-  const keys = []
-  let cursor
-  do {
-    const result = await kv.list({ prefix, cursor })
-    keys.push(...(result.keys || []))
-    cursor = result.list_complete ? undefined : result.cursor
-  } while (cursor && keys.length < 5000)
-  return keys
-}
-
 const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]))
 
 const createToolBreakdown = () => Object.fromEntries(TOOLS.map((tool) => [tool, createEmptyMetrics()]))
@@ -110,27 +99,6 @@ const renderBar = (value, max) => {
   return `<div class="bar" aria-label="${formatNumber(value)}"><i style="width:${width}%"></i></div>`
 }
 
-const getIdentityTotals = async (kv, type, day) => {
-  const prefix = `${type}:day:${day}:`
-  const keys = await readKvList(kv, prefix)
-  const totals = createEmptyMetrics()
-  const ids = new Set()
-
-  await Promise.all(keys.map(async ({ name }) => {
-    const rest = name.slice(prefix.length)
-    const parts = rest.split(':')
-    const id = parts[0]
-    if (id) ids.add(id)
-    if (parts.length !== 2) return
-    const event = parts[1]
-    if (!EVENTS.includes(event)) return
-    totals[event] += await readCount(kv, name)
-  }))
-
-  if (type === 'visitor') totals.unique_visitor = ids.size
-  return totals
-}
-
 const getToolMetrics = async (kv, scope, day = '') => {
   const tools = createToolBreakdown()
 
@@ -142,49 +110,16 @@ const getToolMetrics = async (kv, scope, day = '') => {
       tools[tool][event] = await readCount(kv, key)
     }))
 
-    const visitorPrefix = scope === 'day'
-      ? `tool:${tool}:visitor:day:${day}:`
-      : `tool:${tool}:visitor:total:`
-    tools[tool].unique_visitor = (await readKvList(kv, visitorPrefix)).length
+    const visitorKey = scope === 'day'
+      ? `tool:${tool}:day:${day}:unique_visitor`
+      : `tool:${tool}:total:unique_visitor`
+    tools[tool].unique_visitor = await readCount(kv, visitorKey)
   }))
 
   return tools
 }
 
-const mergeMetricMaximums = (...sources) => {
-  const merged = createEmptyMetrics()
-  METRICS.forEach((metric) => {
-    merged[metric] = Math.max(...sources.map((source) => source?.[metric] || 0))
-  })
-  return merged
-}
-
-const getTodayReturningVisitors = async (kv, days) => {
-  const today = days[0]?.day
-  if (!today) return { returning: 0, trackedToday: 0 }
-
-  const todayKeys = await readKvList(kv, `visitor:day:${today}:`)
-  const todayIds = todayKeys
-    .map(({ name }) => name.slice(`visitor:day:${today}:`.length).split(':')[0])
-    .filter(Boolean)
-
-  const previousIds = new Set()
-  for (const day of days.slice(1, 8)) {
-    const keys = await readKvList(kv, `visitor:day:${day.day}:`)
-    keys.forEach(({ name }) => {
-      const id = name.slice(`visitor:day:${day.day}:`.length).split(':')[0]
-      if (id) previousIds.add(id)
-    })
-  }
-
-  const uniqueToday = [...new Set(todayIds)]
-  return {
-    returning: uniqueToday.filter((id) => previousIds.has(id)).length,
-    trackedToday: uniqueToday.length,
-  }
-}
-
-const renderStatsPage = ({ labels, totals, days, returningVisitors = { returning: 0 }, toolBreakdown = {}, configured = true, message = '' }) => {
+const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured = true, message = '' }) => {
   const today = getToday(days)
   const exportedToday = sumEvents(today, ['download', 'download_zip'])
   const exportedTotal = sumEvents(totals, ['download', 'download_zip'])
@@ -194,11 +129,8 @@ const renderStatsPage = ({ labels, totals, days, returningVisitors = { returning
   const exportMax = getMax(days, ['download', 'download_zip'])
   const visitMax = getMax(days, ['page_view'])
   const recentDays = [...days].reverse()
-  const returningCount = returningVisitors?.returning || 0
-
   const metricCards = [
     { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
-    { label: '今日回访访客', value: returningCount, hint: '近 7 天曾访问过' },
     { label: '今天上传', value: today.image_uploaded, hint: `处理成功 ${formatNumber(sumEvents(today, ['process_success', 'batch_item_success']))}` },
     { label: '今天导出图片', value: exportedToday, hint: `ZIP 内图片 ${formatNumber(today.download_zip)}` },
     { label: '累计独立访客', value: totals.unique_visitor, hint: `累计会话 ${formatNumber(totals.session_start)}` },
@@ -433,7 +365,7 @@ const renderStatsPage = ({ labels, totals, days, returningVisitors = { returning
     <section>
       <div class="section-head">
         <h2>功能使用情况</h2>
-        <p>按图片放大和格式转换拆分；此表只使用新事件日志，部署后开始准确细分。</p>
+        <p>按图片放大和格式转换拆分；部署后使用固定计数器统计。</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -495,7 +427,7 @@ const renderStatsPage = ({ labels, totals, days, returningVisitors = { returning
       </div>
     </section>
 
-    <p class="note">口径说明：准确来访量以“独立访客”为准；页面浏览事件在旧版本中使用非原子 KV 计数，历史值可能低估且无法精确还原。ZIP 数值表示 ZIP 包内导出的图片数量，不是点击 ZIP 按钮的次数。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。需要原始数据可打开 <a href="?format=json">JSON 版本</a>。</p>
+    <p class="note">口径说明：准确来访量以“独立访客”为准；2026-07-02 之后的独立访客和功能细分由固定计数器记录，统计页不再扫描原始访客列表。ZIP 数值表示 ZIP 包内导出的图片数量，不是点击 ZIP 按钮的次数。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。需要原始数据可打开 <a href="?format=json">JSON 版本</a>。</p>
   </main>
 </body>
 </html>`
@@ -534,35 +466,21 @@ export async function onRequestGet(context) {
     await Promise.all(METRICS.map(async (metric) => {
       counterValues[metric] = await readCount(kv, `day:${day}:${metric}`)
     }))
-    const visitorTotals = await getIdentityTotals(kv, 'visitor', day)
-    const values = mergeMetricMaximums(counterValues, visitorTotals)
-    days.push({ day, ...values })
+    days.push({ day, ...counterValues })
   }
 
-  const dayTotals = createEmptyMetrics()
-  days.forEach((day) => {
-    METRICS.forEach((metric) => {
-      dayTotals[metric] += day[metric] || 0
-    })
-  })
-
-  const totalVisitorKeys = await readKvList(kv, 'visitor:total:')
-  const totals = mergeMetricMaximums(counterTotals, dayTotals)
-  totals.unique_visitor = Math.max(counterTotals.unique_visitor || 0, totalVisitorKeys.length)
-
   const today = days[0]?.day
-  const [returningVisitors, todayTools, totalTools] = today ? await Promise.all([
-    getTodayReturningVisitors(kv, days),
+  const totals = counterTotals
+  const [todayTools, totalTools] = today ? await Promise.all([
     getToolMetrics(kv, 'day', today),
     getToolMetrics(kv, 'total'),
   ]) : [
-    { returning: 0, trackedToday: 0 },
     createToolBreakdown(),
     createToolBreakdown(),
   ]
   const toolBreakdown = {
     labels: TOOL_LABELS,
-    note: '功能细分从 2026-07-02 起使用轻量计数器统计；更早事件无法准确反推属于图片放大还是格式转换。',
+    note: '功能细分从 2026-07-02 起使用固定计数器统计；更早事件无法准确反推属于图片放大还是格式转换。',
     today: todayTools,
     totals: totalTools,
   }
@@ -570,7 +488,7 @@ export async function onRequestGet(context) {
   const body = {
     ok: true,
     timezone: 'Asia/Shanghai',
-    returningVisitors,
+    returningVisitors: { returning: 0, trackedToday: today?.unique_visitor || 0 },
     toolBreakdown,
     labels: LABELS,
     totals,

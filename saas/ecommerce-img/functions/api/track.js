@@ -48,10 +48,18 @@ const countUniqueVisitor = async (kv, visitorId, day) => {
 
   const totalKey = `visitor:total:${visitorId}`
   const dayKey = `visitor:day:${day}:${visitorId}`
-  await Promise.all([
+  const [seenTotal, seenToday] = await Promise.all([
+    kv.get(totalKey),
+    kv.get(dayKey),
+  ])
+  const writes = [
     kv.put(totalKey, '1'),
     kv.put(dayKey, '1', { expirationTtl: EVENT_LOG_TTL }),
-  ])
+  ]
+  if (!seenTotal) writes.push(addCount(kv, 'total:unique_visitor', 1))
+  if (!seenToday) writes.push(addCount(kv, `day:${day}:unique_visitor`, 1))
+
+  await Promise.all(writes)
 }
 
 const countToolEvent = async (kv, tool, event, day, amount) => {
@@ -66,10 +74,20 @@ const countToolEvent = async (kv, tool, event, day, amount) => {
 const countToolVisitor = async (kv, tool, visitorId, day) => {
   const normalizedTool = normalizeTool(tool)
   if (normalizedTool === 'unknown' || !ID_PATTERN.test(visitorId)) return
-  await Promise.all([
-    kv.put(`tool:${normalizedTool}:visitor:total:${visitorId}`, '1'),
-    kv.put(`tool:${normalizedTool}:visitor:day:${day}:${visitorId}`, '1', { expirationTtl: EVENT_LOG_TTL }),
+  const totalKey = `tool:${normalizedTool}:visitor:total:${visitorId}`
+  const dayKey = `tool:${normalizedTool}:visitor:day:${day}:${visitorId}`
+  const [seenTotal, seenToday] = await Promise.all([
+    kv.get(totalKey),
+    kv.get(dayKey),
   ])
+  const writes = [
+    kv.put(totalKey, '1'),
+    kv.put(dayKey, '1', { expirationTtl: EVENT_LOG_TTL }),
+  ]
+  if (!seenTotal) writes.push(addCount(kv, `tool:${normalizedTool}:total:unique_visitor`, 1))
+  if (!seenToday) writes.push(addCount(kv, `tool:${normalizedTool}:day:${day}:unique_visitor`, 1))
+
+  await Promise.all(writes)
 }
 
 const normalizeTool = (tool) => ALLOWED_TOOLS.has(tool) ? tool : 'unknown'
