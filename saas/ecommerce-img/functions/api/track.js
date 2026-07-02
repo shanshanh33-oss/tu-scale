@@ -11,11 +11,12 @@ const ALLOWED_EVENTS = new Set([
   'batch_item_error',
   'download',
   'download_zip',
+  'survey_submit',
 ])
 
 const ID_PATTERN = /^[a-z]_[a-zA-Z0-9-]{8,80}$/
 const EVENT_LOG_TTL = 60 * 60 * 24 * 60
-const ALLOWED_TOOLS = new Set(['upscale', 'converter'])
+const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image'])
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,

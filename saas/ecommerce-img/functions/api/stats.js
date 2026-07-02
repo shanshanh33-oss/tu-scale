@@ -11,6 +11,7 @@ const EVENTS = [
   'batch_item_error',
   'download',
   'download_zip',
+  'survey_submit',
 ]
 
 const METRICS = [
@@ -18,11 +19,12 @@ const METRICS = [
   'unique_visitor',
 ]
 
-const TOOLS = ['upscale', 'converter', 'unknown']
+const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
 
 const TOOL_LABELS = {
   upscale: '图片放大',
   converter: '格式转换',
+  product_image: '商品图规范化',
   unknown: '未细分旧数据',
 }
 
@@ -40,6 +42,7 @@ const LABELS = {
   batch_item_error: '批量失败图片',
   download: '单张下载图片数',
   download_zip: 'ZIP 导出图片数',
+  survey_submit: '功能意愿反馈',
 }
 
 const json = (body, status = 200) => new Response(JSON.stringify(body, null, 2), {
@@ -67,6 +70,29 @@ const readCount = async (kv, key) => {
   const value = await kv.get(key)
   const count = Number.parseInt(value || '0', 10)
   return Number.isFinite(count) ? count : 0
+}
+
+const readKvList = async (kv, prefix, maxKeys = 20000) => {
+  const keys = []
+  let cursor
+  do {
+    const result = await kv.list({ prefix, cursor })
+    keys.push(...(result.keys || []))
+    cursor = result.list_complete ? undefined : result.cursor
+  } while (cursor && keys.length < maxKeys)
+  return keys
+}
+
+const getCachedJson = async (kv, key) => {
+  try {
+    return JSON.parse(await kv.get(key) || 'null')
+  } catch {
+    return null
+  }
+}
+
+const putCachedJson = async (kv, key, value, expirationTtl) => {
+  await kv.put(key, JSON.stringify(value), { expirationTtl })
 }
 
 const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]))
@@ -99,27 +125,94 @@ const renderBar = (value, max) => {
   return `<div class="bar" aria-label="${formatNumber(value)}"><i style="width:${width}%"></i></div>`
 }
 
-const getToolMetrics = async (kv, scope, day = '') => {
-  const tools = createToolBreakdown()
+const normalizeEvent = (event) => EVENTS.includes(event) ? event : ''
 
-  await Promise.all(TOOLS.filter((tool) => tool !== 'unknown').map(async (tool) => {
-    await Promise.all(EVENTS.map(async (event) => {
-      const key = scope === 'day'
-        ? `tool:${tool}:day:${day}:${event}`
-        : `tool:${tool}:total:${event}`
-      tools[tool][event] = await readCount(kv, key)
-    }))
+const normalizeTool = (tool) => TOOLS.includes(tool) ? tool : 'unknown'
 
-    const visitorKey = scope === 'day'
-      ? `tool:${tool}:day:${day}:unique_visitor`
-      : `tool:${tool}:total:unique_visitor`
-    tools[tool].unique_visitor = await readCount(kv, visitorKey)
-  }))
-
-  return tools
+const addToolEvent = (tools, tool, event, amount) => {
+  const key = normalizeTool(tool)
+  tools[key][event] += amount
 }
 
-const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured = true, message = '' }) => {
+const readRecordsInChunks = async (kv, keys, chunkSize = 50) => {
+  const records = []
+  for (let i = 0; i < keys.length; i += chunkSize) {
+    const chunk = keys.slice(i, i + chunkSize)
+    const values = await Promise.all(chunk.map(({ name }) => kv.get(name)))
+    records.push(...values)
+  }
+  return records
+}
+
+const mergeMetrics = (target, source) => {
+  METRICS.forEach((metric) => {
+    target[metric] += source?.[metric] || 0
+  })
+}
+
+const mergeToolBreakdown = (target, source) => {
+  TOOLS.forEach((tool) => {
+    mergeMetrics(target[tool], source?.[tool] || {})
+  })
+}
+
+const summarizeEventLogsForDay = async (kv, day) => {
+  const keys = await readKvList(kv, `event:${day}:`)
+  const records = await readRecordsInChunks(kv, keys)
+  const totals = createEmptyMetrics()
+  const tools = createToolBreakdown()
+  const visitors = new Set()
+  const toolVisitors = Object.fromEntries(TOOLS.map((tool) => [tool, new Set()]))
+
+  records.forEach((value) => {
+    let record
+    try {
+      record = JSON.parse(value || '{}')
+    } catch {
+      return
+    }
+
+    const event = normalizeEvent(String(record.event || ''))
+    if (!event) return
+
+    const amount = Math.max(1, Number.parseInt(record.amount || '1', 10) || 1)
+    const visitorId = String(record.visitorId || '')
+    const tool = normalizeTool(String(record.tool || 'unknown'))
+
+    totals[event] += amount
+    addToolEvent(tools, tool, event, amount)
+
+    if (visitorId) {
+      visitors.add(visitorId)
+      toolVisitors[tool].add(visitorId)
+    }
+  })
+
+  totals.unique_visitor = visitors.size
+  TOOLS.forEach((tool) => {
+    tools[tool].unique_visitor = toolVisitors[tool].size
+  })
+
+  return {
+    day,
+    totals,
+    tools,
+    eventLogCount: keys.length,
+    source: 'event_logs',
+  }
+}
+
+const getDaySummary = async (kv, day, today, forceRefresh = false) => {
+  const cacheKey = `stats:summary:v4:${day}`
+  const cached = forceRefresh ? null : await getCachedJson(kv, cacheKey)
+  if (cached?.day === day) return cached
+
+  const summary = await summarizeEventLogsForDay(kv, day)
+  await putCachedJson(kv, cacheKey, summary, day === today ? 15 : 60 * 60 * 24 * 14)
+  return summary
+}
+
+const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource = {}, configured = true, message = '' }) => {
   const today = getToday(days)
   const exportedToday = sumEvents(today, ['download', 'download_zip'])
   const exportedTotal = sumEvents(totals, ['download', 'download_zip'])
@@ -163,7 +256,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured 
     </tr>
   `).join('')
 
-  const toolRows = ['upscale', 'converter'].map((tool) => {
+  const toolRows = ['upscale', 'converter', 'product_image'].map((tool) => {
     const total = toolBreakdown?.totals?.[tool] || createEmptyMetrics()
     const todayValue = toolBreakdown?.today?.[tool] || createEmptyMetrics()
     const totalProcessed = sumEvents(total, ['process_success', 'batch_item_success'])
@@ -186,6 +279,9 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured 
   const status = configured
     ? '<span class="status ok">统计正常</span>'
     : `<span class="status warn">${message || '统计未配置'}</span>`
+  const dataSourceText = dataSource?.source === 'event_logs'
+    ? `原始事件日志汇总，最近刷新 ${dataSource.generatedAt || ''}`
+    : '统计未配置'
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -355,7 +451,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured 
     <header>
       <div>
         <h1>TU Scale 流量统计</h1>
-        <p>按北京时间统计。独立访客为匿名浏览器 ID 统计；旧页面浏览事件可能因 KV 非原子计数丢失。</p>
+        <p>按北京时间统计。数字从原始事件日志汇总，不再用估算计数器当最终结果。</p>
       </div>
       ${status}
     </header>
@@ -365,7 +461,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured 
     <section>
       <div class="section-head">
         <h2>功能使用情况</h2>
-        <p>按图片放大和格式转换拆分；部署后使用固定计数器统计。</p>
+        <p>按图片放大、格式转换和商品图规范化拆分。</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -396,7 +492,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured 
               <th>日期</th>
               <th>浏览事件（参考）</th>
               <th>独立访客</th>
-              <th>访客粗略值</th>
+              <th>访问会话</th>
               <th>上传图片</th>
               <th>处理成功</th>
               <th>导出图片</th>
@@ -427,7 +523,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, configured 
       </div>
     </section>
 
-    <p class="note">口径说明：准确来访量以“独立访客”为准；2026-07-02 之后的独立访客和功能细分由固定计数器记录，统计页不再扫描原始访客列表。ZIP 数值表示 ZIP 包内导出的图片数量，不是点击 ZIP 按钮的次数。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。需要原始数据可打开 <a href="?format=json">JSON 版本</a>。</p>
+    <p class="note">口径说明：准确来访量以“独立访客”为准；访问会话为 session_start 事件数。ZIP 数值表示 ZIP 包内导出的图片数量，不是点击 ZIP 按钮的次数。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。数据源：${dataSourceText}。需要原始数据可打开 <a href="?format=json">JSON 版本</a>。</p>
   </main>
 </body>
 </html>`
@@ -454,33 +550,27 @@ export async function onRequestGet(context) {
     return wantsHtml && !wantsJson ? html(renderStatsPage(body), 202) : json(body, 202)
   }
 
-  const counterTotals = {}
-  await Promise.all(METRICS.map(async (metric) => {
-    counterTotals[metric] = await readCount(kv, `total:${metric}`)
-  }))
-
-  const days = []
+  const todayDate = getChinaDate()
+  const forceRefresh = requestUrl.searchParams.get('refresh') === '1'
+  const summaries = []
   for (let i = 0; i < 30; i++) {
     const day = getChinaDate(i)
-    const counterValues = {}
-    await Promise.all(METRICS.map(async (metric) => {
-      counterValues[metric] = await readCount(kv, `day:${day}:${metric}`)
-    }))
-    days.push({ day, ...counterValues })
+    summaries.push(await getDaySummary(kv, day, todayDate, forceRefresh))
   }
+  const days = summaries.map((summary) => ({ day: summary.day, ...summary.totals, eventLogCount: summary.eventLogCount }))
 
-  const today = days[0]?.day
-  const totals = counterTotals
-  const [todayTools, totalTools] = today ? await Promise.all([
-    getToolMetrics(kv, 'day', today),
-    getToolMetrics(kv, 'total'),
-  ]) : [
-    createToolBreakdown(),
-    createToolBreakdown(),
-  ]
+  const totals = createEmptyMetrics()
+  const totalTools = createToolBreakdown()
+  const todayTools = createToolBreakdown()
+  summaries.forEach((summary) => {
+    mergeMetrics(totals, summary.totals)
+    mergeToolBreakdown(totalTools, summary.tools)
+    if (summary.day === todayDate) mergeToolBreakdown(todayTools, summary.tools)
+  })
+
   const toolBreakdown = {
     labels: TOOL_LABELS,
-    note: '功能细分从 2026-07-02 起使用固定计数器统计；更早事件无法准确反推属于图片放大还是格式转换。',
+    note: '功能细分从原始事件日志中的 tool 字段汇总；没有 tool 字段的旧事件会归到“未细分旧数据”。',
     today: todayTools,
     totals: totalTools,
   }
@@ -488,8 +578,13 @@ export async function onRequestGet(context) {
   const body = {
     ok: true,
     timezone: 'Asia/Shanghai',
-    returningVisitors: { returning: 0, trackedToday: today?.unique_visitor || 0 },
+    returningVisitors: { returning: 0, trackedToday: days[0]?.unique_visitor || 0 },
     toolBreakdown,
+    dataSource: {
+      source: 'event_logs',
+      generatedAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19),
+      cacheSeconds: 15,
+    },
     labels: LABELS,
     totals,
     days,
