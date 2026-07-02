@@ -530,65 +530,81 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
 }
 
 export async function onRequestGet(context) {
-  const kv = context.env.TUSCALE_ANALYTICS
   const requestUrl = new URL(context.request.url)
   const accept = context.request.headers.get('accept') || ''
   const wantsHtml = requestUrl.searchParams.get('format') === 'html'
     || !accept.includes('application/json')
     || accept.includes('text/html')
   const wantsJson = requestUrl.searchParams.get('format') === 'json'
+  const wantsDebug = requestUrl.searchParams.get('debug') === '1'
 
-  if (!kv) {
+  try {
+    const kv = context.env.TUSCALE_ANALYTICS
+
+    if (!kv) {
+      const body = {
+        ok: false,
+        configured: false,
+        message: 'Missing Cloudflare KV binding: TUSCALE_ANALYTICS',
+        labels: LABELS,
+        totals: Object.fromEntries(METRICS.map((metric) => [metric, 0])),
+        days: [],
+      }
+      return wantsHtml && !wantsJson ? html(renderStatsPage(body), 202) : json(body, 202)
+    }
+
+    const todayDate = getChinaDate()
+    const forceRefresh = requestUrl.searchParams.get('refresh') === '1'
+    const summaries = []
+    for (let i = 0; i < 30; i++) {
+      const day = getChinaDate(i)
+      summaries.push(await getDaySummary(kv, day, todayDate, forceRefresh))
+    }
+    const days = summaries.map((summary) => ({ day: summary.day, ...summary.totals, eventLogCount: summary.eventLogCount }))
+
+    const totals = createEmptyMetrics()
+    const totalTools = createToolBreakdown()
+    const todayTools = createToolBreakdown()
+    summaries.forEach((summary) => {
+      mergeMetrics(totals, summary.totals)
+      mergeToolBreakdown(totalTools, summary.tools)
+      if (summary.day === todayDate) mergeToolBreakdown(todayTools, summary.tools)
+    })
+
+    const toolBreakdown = {
+      labels: TOOL_LABELS,
+      note: '功能细分从原始事件日志中的 tool 字段汇总；没有 tool 字段的旧事件会归到“未细分旧数据”。',
+      today: todayTools,
+      totals: totalTools,
+    }
+
+    const body = {
+      ok: true,
+      timezone: 'Asia/Shanghai',
+      returningVisitors: { returning: 0, trackedToday: days[0]?.unique_visitor || 0 },
+      toolBreakdown,
+      dataSource: {
+        source: 'event_logs',
+        generatedAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19),
+        cacheSeconds: 60,
+      },
+      labels: LABELS,
+      totals,
+      days,
+    }
+
+    return wantsHtml && !wantsJson ? html(renderStatsPage(body)) : json(body)
+  } catch (error) {
     const body = {
       ok: false,
-      configured: false,
-      message: 'Missing Cloudflare KV binding: TUSCALE_ANALYTICS',
+      configured: true,
+      message: '统计接口运行错误',
+      error: wantsDebug ? String(error?.message || error) : 'STATS_RUNTIME_ERROR',
+      stack: wantsDebug ? String(error?.stack || '') : undefined,
       labels: LABELS,
       totals: Object.fromEntries(METRICS.map((metric) => [metric, 0])),
       days: [],
     }
-    return wantsHtml && !wantsJson ? html(renderStatsPage(body), 202) : json(body, 202)
+    return wantsHtml && !wantsJson ? html(renderStatsPage(body), 500) : json(body, 500)
   }
-
-  const todayDate = getChinaDate()
-  const forceRefresh = requestUrl.searchParams.get('refresh') === '1'
-  const summaries = []
-  for (let i = 0; i < 30; i++) {
-    const day = getChinaDate(i)
-    summaries.push(await getDaySummary(kv, day, todayDate, forceRefresh))
-  }
-  const days = summaries.map((summary) => ({ day: summary.day, ...summary.totals, eventLogCount: summary.eventLogCount }))
-
-  const totals = createEmptyMetrics()
-  const totalTools = createToolBreakdown()
-  const todayTools = createToolBreakdown()
-  summaries.forEach((summary) => {
-    mergeMetrics(totals, summary.totals)
-    mergeToolBreakdown(totalTools, summary.tools)
-    if (summary.day === todayDate) mergeToolBreakdown(todayTools, summary.tools)
-  })
-
-  const toolBreakdown = {
-    labels: TOOL_LABELS,
-    note: '功能细分从原始事件日志中的 tool 字段汇总；没有 tool 字段的旧事件会归到“未细分旧数据”。',
-    today: todayTools,
-    totals: totalTools,
-  }
-
-  const body = {
-    ok: true,
-    timezone: 'Asia/Shanghai',
-    returningVisitors: { returning: 0, trackedToday: days[0]?.unique_visitor || 0 },
-    toolBreakdown,
-    dataSource: {
-      source: 'event_logs',
-      generatedAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19),
-      cacheSeconds: 60,
-    },
-    labels: LABELS,
-    totals,
-    days,
-  }
-
-  return wantsHtml && !wantsJson ? html(renderStatsPage(body)) : json(body)
 }
