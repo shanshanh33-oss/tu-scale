@@ -208,7 +208,7 @@ const getDaySummary = async (kv, day, today, forceRefresh = false) => {
   if (cached?.day === day) return cached
 
   const summary = await summarizeEventLogsForDay(kv, day)
-  await putCachedJson(kv, cacheKey, summary, day === today ? 15 : 60 * 60 * 24 * 14)
+  await putCachedJson(kv, cacheKey, summary, day === today ? 60 : 60 * 60 * 24 * 14)
   return summary
 }
 
@@ -583,7 +583,7 @@ export async function onRequestGet(context) {
     dataSource: {
       source: 'event_logs',
       generatedAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19),
-      cacheSeconds: 15,
+      cacheSeconds: 60,
     },
     labels: LABELS,
     totals,
