@@ -66,12 +66,6 @@ const getChinaDate = (offset = 0) => {
   return new Date(time).toISOString().slice(0, 10)
 }
 
-const readCount = async (kv, key) => {
-  const value = await kv.get(key)
-  const count = Number.parseInt(value || '0', 10)
-  return Number.isFinite(count) ? count : 0
-}
-
 const readKvList = async (kv, prefix, maxKeys = 20000) => {
   const keys = []
   let cursor
@@ -81,18 +75,6 @@ const readKvList = async (kv, prefix, maxKeys = 20000) => {
     cursor = result.list_complete ? undefined : result.cursor
   } while (cursor && keys.length < maxKeys)
   return keys
-}
-
-const getCachedJson = async (kv, key) => {
-  try {
-    return JSON.parse(await kv.get(key) || 'null')
-  } catch {
-    return null
-  }
-}
-
-const putCachedJson = async (kv, key, value, expirationTtl) => {
-  await kv.put(key, JSON.stringify(value), { expirationTtl })
 }
 
 const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]))
@@ -202,15 +184,7 @@ const summarizeEventLogsForDay = async (kv, day) => {
   }
 }
 
-const getDaySummary = async (kv, day, today, forceRefresh = false) => {
-  const cacheKey = `stats:summary:v4:${day}`
-  const cached = forceRefresh ? null : await getCachedJson(kv, cacheKey)
-  if (cached?.day === day) return cached
-
-  const summary = await summarizeEventLogsForDay(kv, day)
-  await putCachedJson(kv, cacheKey, summary, day === today ? 60 : 60 * 60 * 24 * 14)
-  return summary
-}
+const getDaySummary = (kv, day) => summarizeEventLogsForDay(kv, day)
 
 const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource = {}, configured = true, message = '' }) => {
   const today = getToday(days)
@@ -554,11 +528,10 @@ export async function onRequestGet(context) {
     }
 
     const todayDate = getChinaDate()
-    const forceRefresh = requestUrl.searchParams.get('refresh') === '1'
     const summaries = []
     for (let i = 0; i < 30; i++) {
       const day = getChinaDate(i)
-      summaries.push(await getDaySummary(kv, day, todayDate, forceRefresh))
+      summaries.push(await getDaySummary(kv, day))
     }
     const days = summaries.map((summary) => ({ day: summary.day, ...summary.totals, eventLogCount: summary.eventLogCount }))
 
@@ -586,7 +559,7 @@ export async function onRequestGet(context) {
       dataSource: {
         source: 'event_logs',
         generatedAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19),
-        cacheSeconds: 60,
+        cacheSeconds: 0,
       },
       labels: LABELS,
       totals,
