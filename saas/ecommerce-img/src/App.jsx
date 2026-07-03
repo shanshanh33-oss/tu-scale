@@ -201,6 +201,7 @@ const HOME_FAQ = [
   const [smartSharpen, setSmartSharpen] = useState(true)
   const [sharpenAmount, setSharpenAmount] = useState(1.2)
   const [aiUpscale, setAiUpscale] = useState(false)
+  const [aiDetailMode, setAiDetailMode] = useState('preserve')
   const [reduceArtifacts, setReduceArtifacts] = useState(false)
   const [deblur, setDeblur] = useState(false)
   const [autoLevels, setAutoLevels] = useState(false)
@@ -377,6 +378,7 @@ const batchItemsRef = useRef([])
         if (s.smartSharpen !== undefined) setSmartSharpen(s.smartSharpen)
         if (s.sharpenAmount !== undefined) setSharpenAmount(s.sharpenAmount)
         if (s.aiUpscale !== undefined) setAiUpscale(s.aiUpscale)
+        if (s.aiDetailMode === 'strong' || s.aiDetailMode === 'preserve') setAiDetailMode(s.aiDetailMode)
         if (s.reduceArtifacts !== undefined) setReduceArtifacts(s.reduceArtifacts)
         if (s.deblur !== undefined) setDeblur(s.deblur)
         if (s.autoLevels !== undefined) setAutoLevels(s.autoLevels)
@@ -398,10 +400,10 @@ const batchItemsRef = useRef([])
   // --- 保存设置到 localStorage ---
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      scale, format, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
+      scale, format, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
       keepRatio, customW, customH, fileNameTemplate
     }))
-  }, [scale, format, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
+  }, [scale, format, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
 
   // --- 单图模式 effect ---
   useEffect(() => {
@@ -414,7 +416,7 @@ const batchItemsRef = useRef([])
     })
     setCompareSourceDims(null)
     setProcessStage('')
-  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, keepRatio, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, cropEnabled, cropRect])
+  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, cropEnabled, cropRect])
 
   // --- 单图文件处理 ---
   const handleFile = useCallback((f) => {
@@ -934,7 +936,7 @@ const batchItemsRef = useRef([])
             let aiCanvas = srcCanvas
             for (let i = 0; i < aiPasses; i++) {
               const aiData = aiCanvas.getContext('2d').getImageData(0, 0, aiCanvas.width, aiCanvas.height)
-              const aiResult = await processWithAI(aiData)
+              const aiResult = await processWithAI(aiData, 2, { detailMode: doEnhance.aiDetailMode || 'preserve' })
               aiCanvas = document.createElement('canvas')
               aiCanvas.width = aiResult.width
               aiCanvas.height = aiResult.height
@@ -1006,35 +1008,37 @@ const batchItemsRef = useRef([])
   // --- Unsharp Mask（反锐化掩模，比简单卷积锐化效果好得多）---
   const unsharpMask = (imageData, amount = 0.8, radius = 1) => {
     const { data, width, height } = imageData
-    const blurred = new Float32Array(data.length)
+    const luma = new Float32Array(width * height)
+    const blurred = new Float32Array(width * height)
     const gaussKernel = [2, 4, 2, 4, 8, 4, 2, 4, 2]
     let kernelSum = 0
     for (const v of gaussKernel) kernelSum += v
 
-    // Gaussian blur
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      luma[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+      blurred[p] = luma[p]
+    }
+
+    // Gaussian blur on luminance only, so sharpening cannot shift hue/saturation.
     for (let y = 1; y < height - 1; y++) {
       for (let x = 1; x < width - 1; x++) {
-        for (let c = 0; c < 3; c++) {
-          let sum = 0
-          for (let ky = -1; ky <= 1; ky++)
-            for (let kx = -1; kx <= 1; kx++) {
-              const idx = ((y + ky) * width + (x + kx)) * 4 + c
-              sum += data[idx] * gaussKernel[(ky + 1) * 3 + (kx + 1)]
-            }
-          blurred[(y * width + x) * 4 + c] = sum / kernelSum
-        }
+        let sum = 0
+        for (let ky = -1; ky <= 1; ky++)
+          for (let kx = -1; kx <= 1; kx++)
+            sum += luma[(y + ky) * width + (x + kx)] * gaussKernel[(ky + 1) * 3 + (kx + 1)]
+        blurred[y * width + x] = sum / kernelSum
       }
     }
 
-    // Unsharp mask: output = original + amount * (original - blurred)
     const output = new Uint8ClampedArray(data)
-    for (let i = 0; i < data.length; i += 4) {
-      for (let c = 0; c < 3; c++) {
-        const original = data[i + c]
-        const blur = blurred[i + c]
-        const mask = original - blur
-        output[i + c] = Math.max(0, Math.min(255, original + amount * mask))
-      }
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      const originalY = Math.max(1, luma[p])
+      const targetY = originalY + amount * (originalY - blurred[p])
+      const ratio = Math.max(0.75, Math.min(1.35, targetY / originalY))
+      output[i] = Math.max(0, Math.min(255, Math.round(data[i] * ratio)))
+      output[i + 1] = Math.max(0, Math.min(255, Math.round(data[i + 1] * ratio)))
+      output[i + 2] = Math.max(0, Math.min(255, Math.round(data[i + 2] * ratio)))
+      output[i + 3] = data[i + 3]
     }
     return new ImageData(output, width, height)
   }
@@ -1407,6 +1411,7 @@ const batchItemsRef = useRef([])
       trackEvent('process_start', {
         mode: 'single',
         ai: aiUpscale,
+        aiDetailMode,
         format,
         scaleMode,
         outputPixels: expectedOutput ? expectedOutput.w * expectedOutput.h : 0,
@@ -1439,7 +1444,7 @@ const batchItemsRef = useRef([])
           return compareRes.dataUrl
         })
         setCompareSourceDims({ w: compareRes.width, h: compareRes.height })
-        const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions)
+        const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions)
         setProgress(95)
         setProcessStage('导出结果')
         await new Promise(r => setTimeout(r, 100))
@@ -1454,6 +1459,7 @@ const batchItemsRef = useRef([])
         trackEvent('process_success', {
           mode: 'single',
           ai: aiUpscale,
+          aiDetailMode,
           format,
           width: res.width,
           height: res.height,
@@ -1467,7 +1473,7 @@ const batchItemsRef = useRef([])
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -1475,7 +1481,7 @@ const batchItemsRef = useRef([])
     if (pending.length === 0) return
 
     setBatchProcessing(true)
-    trackEvent('batch_start', { count: pending.length, ai: aiUpscale, format })
+    trackEvent('batch_start', { count: pending.length, ai: aiUpscale, aiDetailMode, format })
       setBatchItems(prev => prev.map(it => it.status === 'pending' && it.preview && it.origDims
         ? { ...it, status: 'pending', progress: 0, result: null, resultBlob: null, resultDims: null, resultSize: null, error: null, stage: '' }
         : it
@@ -1515,7 +1521,7 @@ const batchItemsRef = useRef([])
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: aiUpscale ? '加载 AI 模型' : '解析图片' } : it))
           await ensureAiModel()
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
-          const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions)
+          const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions)
         clearInterval(timer)
 
         const sizeKB = res.size < 1024 * 1024
@@ -1534,6 +1540,7 @@ const batchItemsRef = useRef([])
           } : it))
           trackEvent('batch_item_success', {
             ai: aiUpscale,
+            aiDetailMode,
             format,
             width: res.width,
             height: res.height,
@@ -1547,7 +1554,7 @@ const batchItemsRef = useRef([])
 
     batchCancelRef.current = false
     setBatchProcessing(false)
-  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, cropRect, smartSharpen, aiUpscale, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 单图下载 ---
   const handleDownload = () => {
@@ -2147,13 +2154,26 @@ const batchItemsRef = useRef([])
                   </label>
                 </div>
                   {aiUpscale && (
-                    <p className="mt-2 text-[11px] leading-5 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                      {aiModelLoading
-                        ? '正在下载并加载浏览器端 AI 模型，首次使用可能需要数秒。'
-                        : aiModelReady
-                          ? 'AI 模型已在本地浏览器就绪，图片内容不会上传到 TU Scale 服务器。'
-                          : 'AI 放大会下载模型到浏览器运行，图片内容不上传服务器。'}
-                    </p>
+                    <div className="mt-2 space-y-2">
+                      <div className="inline-grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-white p-1">
+                        {[
+                          ['preserve', '保色'],
+                          ['strong', '强细节'],
+                        ].map(([id, label]) => (
+                          <button key={id} type="button" onClick={() => setAiDetailMode(id)}
+                            className={`px-3 py-1.5 rounded-md text-[11px] font-semibold ${aiDetailMode === id ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[11px] leading-5 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                        {aiModelLoading
+                          ? '正在下载并加载浏览器端 AI 模型，首次使用可能需要数秒。'
+                          : aiModelReady
+                            ? 'AI 模型已在本地浏览器就绪，默认保留原图颜色，只增强细节。'
+                            : 'AI 放大会下载模型到浏览器运行，图片内容不上传服务器。'}
+                      </p>
+                    </div>
                   )}
                   {!batchMode && processEstimate?.blockReason && (
                     <p className="mt-2 text-[11px] leading-5 text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">

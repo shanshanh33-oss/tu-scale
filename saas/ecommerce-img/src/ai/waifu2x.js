@@ -61,14 +61,18 @@ export async function loadModel() {
 export function isModelLoaded() { return !!session || modelStatus === 'server'; }
 export function getModelStatus() { return modelStatus; }
 
-export async function upscaleWithAI(imageData, scale) {
+export async function upscaleWithAI(imageData, scale = 2, options = {}) {
+  if (typeof scale === 'object' && scale !== null) {
+    options = scale;
+    scale = 2;
+  }
   if (useLocalModel === null && !session) await loadModel();
   if (useLocalModel === false) return runServer(imageData, scale);
-  if (session) return runLocal(imageData);
+  if (session) return runLocal(imageData, options);
   throw new Error('AI model not available');
 }
 
-async function runLocal(imageData) {
+async function runLocal(imageData, options = {}) {
   var { data, width, height } = imageData;
   var inLen = 3 * height * width;
   var inputData = new Float32Array(inLen);
@@ -86,7 +90,12 @@ async function runLocal(imageData) {
   var r = await session.run({ [inputName]: t });
   var o = r[outputName] || Object.values(r)[0]; var oh = o.dims[2], ow = o.dims[3];
   var base = upscaleImageData(imageData, ow, oh);
-  var lumaStats = getLumaStats(base, o, ow, oh);
+  var detail = getAiDetailMap(o, ow, oh);
+  var strongDetail = options.detailMode === 'strong';
+  var detailAmount = strongDetail ? 0.9 : 0.45;
+  var detailLimit = strongDetail ? 34 : 18;
+  var ratioMin = strongDetail ? 0.78 : 0.88;
+  var ratioMax = strongDetail ? 1.28 : 1.14;
   var out = new Uint8ClampedArray(oh * ow * 4);
   for (let y = 0; y < oh; y++)
     for (let x = 0; x < ow; x++) {
@@ -94,9 +103,8 @@ async function runLocal(imageData) {
       var pixel = y * ow + x;
       var baseR = base.data[di], baseG = base.data[di + 1], baseB = base.data[di + 2];
       var baseY = Math.max(1, 0.299 * baseR + 0.587 * baseG + 0.114 * baseB);
-      var matchedAiY = matchLuma(lumaStats.ai[pixel], lumaStats);
-      var targetY = baseY + (matchedAiY - baseY) * 0.35;
-      var ratio = Math.max(0.85, Math.min(1.18, targetY / baseY));
+      var targetY = baseY + Math.max(-detailLimit, Math.min(detailLimit, detail[pixel] * detailAmount));
+      var ratio = Math.max(ratioMin, Math.min(ratioMax, targetY / baseY));
       out[di] = clampByte(baseR * ratio);
       out[di + 1] = clampByte(baseG * ratio);
       out[di + 2] = clampByte(baseB * ratio);
@@ -113,47 +121,37 @@ function clampByte(value) {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
 
-function getLumaStats(base, output, width, height) {
+function getAiDetailMap(output, width, height) {
   var count = width * height;
-  var ai = new Float32Array(count);
-  var baseSum = 0;
-  var aiSum = 0;
+  var luma = new Float32Array(count);
+  var blur = new Float32Array(count);
+  var detail = new Float32Array(count);
 
   for (let i = 0; i < count; i++) {
-    var di = i * 4;
-    var baseY = 0.299 * base.data[di] + 0.587 * base.data[di + 1] + 0.114 * base.data[di + 2];
     var aiR = tensorByte(output.data[i]);
     var aiG = tensorByte(output.data[count + i]);
     var aiB = tensorByte(output.data[count * 2 + i]);
-    var aiY = 0.299 * aiR + 0.587 * aiG + 0.114 * aiB;
-    ai[i] = aiY;
-    baseSum += baseY;
-    aiSum += aiY;
+    luma[i] = 0.299 * aiR + 0.587 * aiG + 0.114 * aiB;
   }
 
-  var baseMean = baseSum / count;
-  var aiMean = aiSum / count;
-  var baseVariance = 0;
-  var aiVariance = 0;
-  for (let i = 0; i < count; i++) {
-    var di = i * 4;
-    var baseY = 0.299 * base.data[di] + 0.587 * base.data[di + 1] + 0.114 * base.data[di + 2];
-    baseVariance += Math.pow(baseY - baseMean, 2);
-    aiVariance += Math.pow(ai[i] - aiMean, 2);
-  }
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      var sum = 0;
+      var weight = 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          var sx = Math.max(0, Math.min(width - 1, x + dx));
+          var sy = Math.max(0, Math.min(height - 1, y + dy));
+          var w = dx === 0 && dy === 0 ? 4 : 1;
+          sum += luma[sy * width + sx] * w;
+          weight += w;
+        }
+      blur[y * width + x] = sum / weight;
+    }
 
-  return {
-    ai,
-    baseMean,
-    aiMean,
-    baseStd: Math.sqrt(baseVariance / count) || 1,
-    aiStd: Math.sqrt(aiVariance / count) || 1,
-  };
-}
+  for (let i = 0; i < count; i++) detail[i] = luma[i] - blur[i];
 
-function matchLuma(value, stats) {
-  var matched = (value - stats.aiMean) * (stats.baseStd / stats.aiStd) + stats.baseMean;
-  return Math.max(0, Math.min(255, matched));
+  return detail;
 }
 
 function upscaleImageData(imageData, width, height) {
