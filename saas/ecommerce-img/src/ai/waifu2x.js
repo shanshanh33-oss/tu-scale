@@ -1,10 +1,19 @@
 // waifu2x AI 放大模块
 const MODEL_PATH = '/models/waifu2x.onnx';
 const SERVER_URL = 'http://localhost:5179';
+const WASM_PATH = '/assets/ort-wasm-simd-threaded-Cpm-ox6i.wasm';
 let session = null;
 let useLocalModel = null;
 let loadingPromise = null;
 let modelStatus = 'unloaded';
+
+async function loadOrt() {
+  var ort = await import('onnxruntime-web/wasm');
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = false;
+  ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': WASM_PATH };
+  return ort;
+}
 
 export async function loadModel() {
   if (session || modelStatus === 'server') return true;
@@ -29,9 +38,9 @@ export async function loadModel() {
     try {
       var res = await fetch(MODEL_PATH);
       if (res.ok) {
-        var ort = await import('onnxruntime-web/wasm');
+        var ort = await loadOrt();
         var buf = await res.arrayBuffer();
-        session = await ort.InferenceSession.create(buf);
+        session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
         useLocalModel = true;
         modelStatus = 'loaded';
         return true;
@@ -70,7 +79,7 @@ async function runLocal(imageData) {
       for (let c = 0; c < 3; c++)
         inputData[c * height * width + y * width + x] = yv;
     }
-  var ort = await import('onnxruntime-web/wasm');
+  var ort = await loadOrt();
   var t = new ort.Tensor('float32', inputData, [1, 3, height, width]);
   var inputName = session.inputNames?.[0] || 'Input1';
   var outputName = session.outputNames?.[0] || 'output';
