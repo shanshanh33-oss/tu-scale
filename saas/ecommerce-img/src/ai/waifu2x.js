@@ -86,18 +86,17 @@ async function runLocal(imageData) {
   var r = await session.run({ [inputName]: t });
   var o = r[outputName] || Object.values(r)[0]; var oh = o.dims[2], ow = o.dims[3];
   var base = upscaleImageData(imageData, ow, oh);
+  var lumaStats = getLumaStats(base, o, ow, oh);
   var out = new Uint8ClampedArray(oh * ow * 4);
   for (let y = 0; y < oh; y++)
     for (let x = 0; x < ow; x++) {
       var di = (y * ow + x) * 4;
-      var aiR = tensorByte(o.data[0 * oh * ow + y * ow + x]);
-      var aiG = tensorByte(o.data[1 * oh * ow + y * ow + x]);
-      var aiB = tensorByte(o.data[2 * oh * ow + y * ow + x]);
-      var aiY = 0.299 * aiR + 0.587 * aiG + 0.114 * aiB;
+      var pixel = y * ow + x;
       var baseR = base.data[di], baseG = base.data[di + 1], baseB = base.data[di + 2];
       var baseY = Math.max(1, 0.299 * baseR + 0.587 * baseG + 0.114 * baseB);
-      var targetY = baseY + (aiY - baseY) * 0.65;
-      var ratio = Math.max(0.65, Math.min(1.45, targetY / baseY));
+      var matchedAiY = matchLuma(lumaStats.ai[pixel], lumaStats);
+      var targetY = baseY + (matchedAiY - baseY) * 0.35;
+      var ratio = Math.max(0.85, Math.min(1.18, targetY / baseY));
       out[di] = clampByte(baseR * ratio);
       out[di + 1] = clampByte(baseG * ratio);
       out[di + 2] = clampByte(baseB * ratio);
@@ -112,6 +111,49 @@ function tensorByte(value) {
 
 function clampByte(value) {
   return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function getLumaStats(base, output, width, height) {
+  var count = width * height;
+  var ai = new Float32Array(count);
+  var baseSum = 0;
+  var aiSum = 0;
+
+  for (let i = 0; i < count; i++) {
+    var di = i * 4;
+    var baseY = 0.299 * base.data[di] + 0.587 * base.data[di + 1] + 0.114 * base.data[di + 2];
+    var aiR = tensorByte(output.data[i]);
+    var aiG = tensorByte(output.data[count + i]);
+    var aiB = tensorByte(output.data[count * 2 + i]);
+    var aiY = 0.299 * aiR + 0.587 * aiG + 0.114 * aiB;
+    ai[i] = aiY;
+    baseSum += baseY;
+    aiSum += aiY;
+  }
+
+  var baseMean = baseSum / count;
+  var aiMean = aiSum / count;
+  var baseVariance = 0;
+  var aiVariance = 0;
+  for (let i = 0; i < count; i++) {
+    var di = i * 4;
+    var baseY = 0.299 * base.data[di] + 0.587 * base.data[di + 1] + 0.114 * base.data[di + 2];
+    baseVariance += Math.pow(baseY - baseMean, 2);
+    aiVariance += Math.pow(ai[i] - aiMean, 2);
+  }
+
+  return {
+    ai,
+    baseMean,
+    aiMean,
+    baseStd: Math.sqrt(baseVariance / count) || 1,
+    aiStd: Math.sqrt(aiVariance / count) || 1,
+  };
+}
+
+function matchLuma(value, stats) {
+  var matched = (value - stats.aiMean) * (stats.baseStd / stats.aiStd) + stats.baseMean;
+  return Math.max(0, Math.min(255, matched));
 }
 
 function upscaleImageData(imageData, width, height) {
