@@ -172,6 +172,7 @@ function ToolHeader({ active, navigate }) {
   const items = [
     { id: 'upscale', label: '图片放大', path: '/' },
     { id: 'converter', label: '格式转换', path: '/format-converter' },
+    { id: 'product-image', label: '商品图规范化', path: '/product-image' },
     { id: 'contact', label: '反馈联系', path: '/contact' },
   ]
 
@@ -179,11 +180,8 @@ function ToolHeader({ active, navigate }) {
     <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 sticky top-0 z-10 shadow-sm">
       <div className="max-w-6xl mx-auto flex items-center gap-4">
         <img src="/logo.png" alt="TU Scale" className="h-16 sm:h-18 w-auto shrink-0" />
-        <div className="flex flex-col min-w-0 mr-auto">
-          <div className="flex flex-col gap-2 min-w-0">
-            <div className="text-lg sm:text-xl font-bold tracking-tight" style={{ color: '#8040f0' }}>TU Scale</div>
-            <div className="text-[10px] text-gray-400 leading-none">本地图片工具箱</div>
-          </div>
+        <div className="flex flex-col min-w-0 mr-auto justify-center">
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight truncate leading-tight" style={{ color: '#8040f0' }}>TU Scale</h1>
         </div>
         <nav className="flex items-center gap-1 overflow-x-auto">
           {items.map(item => (

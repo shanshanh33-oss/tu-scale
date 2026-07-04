@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "remove-bg-server": "node server/remove-bg-server.cjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",

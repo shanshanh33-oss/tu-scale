@@ -5,6 +5,7 @@ import { loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
 import FormatConverter from './tools/FormatConverter'
 import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
+import BackgroundTool from './tools/BackgroundTool'
 import { trackEvent } from './tools/shared'
 
 const QUALITY_PRESETS = [
@@ -17,6 +18,7 @@ const QUALITY_PRESETS = [
 const TOOL_NAV = [
   { id: 'upscale', label: '图片放大', path: '/' },
   { id: 'converter', label: '格式转换', path: '/format-converter' },
+  { id: 'product-image', label: '商品图规范化', path: '/product-image' },
   { id: 'contact', label: '反馈联系', path: '/contact' },
 ]
 
@@ -143,6 +145,10 @@ const PAGE_META = {
   '/format-converter': {
     title: '免费图片格式转换 - JPG/PNG/WebP/AVIF 批量转换 | TU Scale',
     description: 'TU Scale 免费图片格式转换工具，支持 JPG、PNG、WebP、AVIF 批量转换、质量调节和 ZIP 下载。图片本地处理，不上传服务器。',
+  },
+  '/product-image': {
+    title: '商品图规范化与白底图测试 - TU Scale',
+    description: 'TU Scale 商品图规范化测试工具，支持白底图、平台尺寸、留白和高质量 API 抠图意愿测试。',
   },
   '/contact': {
     title: '反馈与联系 - TU Scale 本地图片工具箱',
@@ -1649,30 +1655,27 @@ const batchItemsRef = useRef([])
   }, [])
 
   if (route === '/format-converter') return <FormatConverter navigate={navigate} />
+  if (route === '/product-image') return <BackgroundTool navigate={navigate} />
   if (route === '/contact') return <ContactPage navigate={navigate} />
 
  return (
     <div className="min-h-screen bg-gray-50/80">
-      <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 flex items-center gap-4 sticky top-0 z-10 shadow-sm">
-        <img src="/logo.png" alt="TU Scale" className="h-16 sm:h-18 w-auto shrink-0" />
-        <div className="flex flex-col min-w-0 flex-1">
-          <div className="flex flex-col gap-2 min-w-0">
-            <h1 className="text-lg sm:text-xl font-bold tracking-tight truncate" style={{ color: '#8040f0' }}>TU Scale 本地图片工具箱-图片放大工具</h1>
-            <div className="hidden sm:flex flex-wrap gap-2">
-              {['免费使用', '本地处理', '图片不上传', '支持批量', '格式转换'].map(item => (
-                <span key={item} className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-xs font-semibold text-gray-500 shadow-sm">{item}</span>
-              ))}
-            </div>
+      <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-6xl mx-auto flex items-center gap-4">
+          <img src="/logo.png" alt="TU Scale" className="h-16 sm:h-18 w-auto shrink-0" />
+          <div className="flex flex-col min-w-0 mr-auto justify-center">
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight truncate leading-tight" style={{ color: '#8040f0' }}>TU Scale 本地图片工具箱-图片放大工具</h1>
+            <p className="mt-2 text-xs sm:text-sm font-semibold text-gray-400 leading-none">图片本地处理，不上传服务器</p>
           </div>
+          <nav className="hidden md:flex items-center gap-1 overflow-x-auto">
+            {TOOL_NAV.map(item => (
+              <button key={item.id} onClick={() => navigate(item.path)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${item.id === 'upscale' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'text-gray-500 hover:bg-gray-50 border border-transparent'}`}>
+                {item.label}
+              </button>
+            ))}
+          </nav>
         </div>
-        <nav className="hidden md:flex items-center gap-1">
-          {TOOL_NAV.map(item => (
-            <button key={item.id} onClick={() => navigate(item.path)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${item.id === 'upscale' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'text-gray-500 border-transparent hover:bg-gray-50'}`}>
-              {item.label}
-            </button>
-          ))}
-        </nav>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6 pb-24 space-y-6">
