@@ -681,6 +681,20 @@ export async function onRequestGet(context) {
   const wantsDebug = requestUrl.searchParams.get('debug') === '1'
 
   if (wantsHtml && !wantsJson) return html(renderStatsShell())
+  if (wantsJson || !wantsHtml) {
+    const days = Array.from({ length: 30 }, (_, index) => getChinaDate(index))
+    return json({
+      ok: true,
+      timezone: 'Asia/Shanghai',
+      message: '统计数据请通过 /api/stats-data 按 day 和 cursor 分片读取，避免单次 Worker 读取过多 KV 日志。',
+      statsDataEndpoint: '/api/stats-data',
+      days,
+      labels: LABELS,
+      metrics: METRICS,
+      tools: TOOLS,
+      toolLabels: TOOL_LABELS,
+    })
+  }
 
   try {
     const kv = context.env.TUSCALE_ANALYTICS
