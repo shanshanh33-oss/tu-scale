@@ -35,6 +35,15 @@ const json = (res, status, body) => {
   res.end(JSON.stringify(body))
 }
 
+const html = (res, status, body) => {
+  res.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  })
+  res.end(body)
+}
+
 const readJson = (req) => new Promise((resolve, reject) => {
   let body = ''
   req.on('data', chunk => {
@@ -187,6 +196,14 @@ const countBy = (records, field) => records.reduce((acc, record) => {
   return acc
 }, {})
 
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[char]))
+
 const handleSurveyResults = async (req, res) => {
   const records = fs.existsSync(SURVEY_LOG)
     ? fs.readFileSync(SURVEY_LOG, 'utf8').split(/\r?\n/).filter(Boolean).map(line => {
@@ -214,6 +231,47 @@ const handleSurveyResults = async (req, res) => {
 
 const clean = (value, max = 1000) => String(value || '').trim().slice(0, max)
 
+const contactTypeLabels = {
+  feature: '功能建议',
+  bug: '问题反馈',
+  format: '格式支持',
+  business: '商务合作',
+}
+
+const formatContactTime = (value) => {
+  if (!value) return '未知时间'
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value))
+  } catch {
+    return value
+  }
+}
+
+const renderContactDashboard = (records) => {
+  const counts = countBy(records, 'type')
+  const rows = records.length ? records.map(record => `
+    <article class="item">
+      <div class="head">
+        <div><span>${escapeHtml(contactTypeLabels[record.type] || record.type || '反馈')}</span><time>${escapeHtml(formatContactTime(record.createdAt))}</time></div>
+        <strong>${escapeHtml(record.contact || '未填写联系方式')}</strong>
+      </div>
+      <p>${escapeHtml(record.message || '-')}</p>
+      <a href="${escapeHtml(record.page || '#')}" target="_blank" rel="noreferrer">${escapeHtml(record.page || '-')}</a>
+    </article>
+  `).join('') : '<div class="empty">还没有联系页反馈。</div>'
+
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>TU Scale 联系反馈看板</title><style>
+    body{margin:0;background:#f4f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1040px;margin:0 auto;padding:30px 18px 50px}h1{margin:0;font-size:28px}.sub{color:#667085;line-height:1.7}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}.card,.item{background:#fff;border:1px solid #d8e0ed;border-radius:14px;box-shadow:0 16px 42px rgba(15,23,42,.08)}.card{padding:16px}.card span{display:block;color:#667085;font-size:12px;font-weight:700}.card strong{display:block;margin-top:8px;font-size:28px}.list{display:grid;gap:12px}.item{padding:16px}.head{display:flex;justify-content:space-between;gap:12px}.head span{display:inline-flex;min-height:26px;align-items:center;padding:0 9px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:800}.head time{margin-left:8px;color:#667085;font-size:12px;font-weight:700}.head strong{font-size:13px;word-break:break-all}.item p{white-space:pre-wrap;line-height:1.75}.item a{color:#2563eb;text-decoration:none;font-size:13px;word-break:break-all}.empty{padding:42px;text-align:center;color:#98a2b3;background:#fff;border:1px dashed #cbd5e1;border-radius:14px}@media(max-width:760px){.stats{grid-template-columns:1fr}.head{display:block}.head strong{display:block;margin-top:8px}}
+  </style></head><body><main class="wrap"><h1>TU Scale 联系反馈看板</h1><p class="sub">本地开发看板，读取 tmp-contact.jsonl。</p><section class="stats"><div class="card"><span>反馈总数</span><strong>${records.length}</strong></div><div class="card"><span>功能建议</span><strong>${counts.feature || 0}</strong></div><div class="card"><span>问题反馈</span><strong>${counts.bug || 0}</strong></div><div class="card"><span>商务合作</span><strong>${counts.business || 0}</strong></div></section><section class="list">${rows}</section></main></body></html>`
+}
+
 const handleContact = async (req, res) => {
   const body = await readJson(req)
   const record = {
@@ -229,6 +287,15 @@ const handleContact = async (req, res) => {
   json(res, 200, { ok: true, configured: true, localLog: CONTACT_LOG })
 }
 
+const handleContactResults = async (req, res) => {
+  const records = fs.existsSync(CONTACT_LOG)
+    ? fs.readFileSync(CONTACT_LOG, 'utf8').split(/\r?\n/).filter(Boolean).map(line => {
+      try { return JSON.parse(line) } catch { return null }
+    }).filter(Boolean).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    : []
+  html(res, 200, renderContactDashboard(records.slice(0, 200)))
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return json(res, 200, { ok: true })
   try {
@@ -236,6 +303,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/api/remove-bg/removebg') return await handleRemoveBg(req, res)
     if (req.method === 'POST' && req.url === '/api/survey') return await handleSurvey(req, res)
     if (req.method === 'POST' && req.url === '/api/contact') return await handleContact(req, res)
+    if (req.method === 'GET' && req.url === '/api/contact-results') return await handleContactResults(req, res)
     if (req.method === 'GET' && req.url === '/api/survey-results') return await handleSurveyResults(req, res)
     json(res, 404, { error: 'NOT_FOUND' })
   } catch (error) {
