@@ -503,6 +503,174 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
 </html>`
 }
 
+const renderStatsShell = () => `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TU Scale 流量统计</title>
+  <style>
+    :root { color-scheme: light; --bg:#f6f7f9; --panel:#fff; --text:#18202a; --muted:#687385; --line:#e4e8ee; --accent:#1677ff; --soft:#dbeafe; --good:#0f9f6e; --warn:#c07900; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.5; }
+    main { width:min(1120px, calc(100% - 32px)); margin:0 auto; padding:32px 0 48px; }
+    header { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:20px; }
+    h1 { margin:0 0 6px; font-size:clamp(28px,4vw,42px); letter-spacing:0; }
+    p { margin:0; color:var(--muted); }
+    .status { display:inline-flex; align-items:center; min-height:34px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--muted); white-space:nowrap; font-size:14px; }
+    .status.ok { color:var(--good); }
+    .status.warn { color:var(--warn); }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:20px 0; }
+    .metric-card, section { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+    .metric-card { padding:18px; }
+    .metric-card span, .metric-card small { display:block; color:var(--muted); font-size:14px; }
+    .metric-card strong { display:block; margin:6px 0 4px; font-size:clamp(28px,5vw,40px); line-height:1.05; letter-spacing:0; }
+    section { margin-top:18px; overflow:hidden; }
+    .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 18px; border-bottom:1px solid var(--line); }
+    h2 { margin:0; font-size:18px; letter-spacing:0; }
+    .table-wrap { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; min-width:720px; }
+    th, td { padding:12px 18px; border-bottom:1px solid var(--line); text-align:left; vertical-align:middle; white-space:nowrap; }
+    th { color:var(--muted); font-weight:600; font-size:13px; background:#fbfcfd; }
+    tr:last-child td { border-bottom:0; }
+    td b { display:inline-block; min-width:42px; font-weight:650; }
+    .bar { display:inline-block; width:96px; height:8px; margin-left:10px; overflow:hidden; border-radius:99px; background:var(--soft); vertical-align:middle; }
+    .bar i { display:block; height:100%; border-radius:inherit; background:var(--accent); }
+    .note { margin-top:14px; font-size:13px; color:var(--muted); }
+    @media (max-width:760px) { main { width:min(100% - 24px,1120px); padding-top:22px; } header, .section-head { display:block; } .status { margin-top:14px; } .metrics { grid-template-columns:1fr; } th, td { padding:11px 14px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>TU Scale 流量统计</h1>
+        <p>按北京时间统计。页面会分批读取原始日志，避免单次 Worker 读取过多导致失败。</p>
+      </div>
+      <span id="status" class="status">正在读取</span>
+    </header>
+    <div id="metrics" class="metrics"></div>
+    <section>
+      <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、格式转换和商品图规范化拆分。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
+    </section>
+    <section>
+      <div class="section-head"><h2>最近 30 天</h2><p>独立访客是全站去重来访；浏览事件仅作参考。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>日期</th><th>浏览事件（参考）</th><th>独立访客</th><th>访问会话</th><th>上传图片</th><th>处理成功</th><th>导出图片</th></tr></thead><tbody id="dayRows"></tbody></table></div>
+    </section>
+    <section>
+      <div class="section-head"><h2>事件明细</h2><p>给调试和判断功能使用情况时看。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>中文名称</th><th>事件名</th><th>累计</th><th>今天</th></tr></thead><tbody id="eventRows"></tbody></table></div>
+    </section>
+    <p id="note" class="note">正在读取原始日志。</p>
+  </main>
+  <script>
+    const EVENTS = ${JSON.stringify(EVENTS)};
+    const METRICS = ${JSON.stringify(METRICS)};
+    const TOOLS = ${JSON.stringify(TOOLS)};
+    const LABELS = ${JSON.stringify(LABELS)};
+    const TOOL_LABELS = ${JSON.stringify(TOOL_LABELS)};
+    const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
+    const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
+    const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
+    const sum = (source, events) => events.reduce((total, event) => total + (source[event] || 0), 0);
+    const percent = (value, total) => total ? Math.round((value / total) * 100) + '%' : '0%';
+    const dayText = (offset = 0) => new Date(Date.now() + 8 * 3600 * 1000 - offset * 86400 * 1000).toISOString().slice(0, 10);
+    const addMetrics = (target, source) => METRICS.forEach((metric) => { target[metric] += source?.[metric] || 0; });
+    const addTools = (target, source) => TOOLS.forEach((tool) => addMetrics(target[tool], source?.[tool] || {}));
+    const uniq = (items) => new Set(items.filter(Boolean)).size;
+    const bar = (value, max) => '<div class="bar"><i style="width:' + Math.max(4, Math.round((value / Math.max(1, max)) * 100)) + '%"></i></div>';
+    const card = (label, value, hint) => '<article class="metric-card"><span>' + label + '</span><strong>' + fmt(value) + '</strong><small>' + hint + '</small></article>';
+
+    const mergeChunk = (day, chunk) => {
+      addMetrics(day, chunk.totals);
+      addTools(day.tools, chunk.tools);
+      day.eventLogCount += chunk.eventLogCount || 0;
+      day.legacyReadCount += chunk.legacyReadCount || 0;
+      day.metadataReadCount += chunk.metadataReadCount || 0;
+      day.visitors.push(...(chunk.visitors || []));
+      TOOLS.forEach((tool) => day.toolVisitors[tool].push(...(chunk.toolVisitors?.[tool] || [])));
+    };
+
+    const loadDay = async (name, onProgress) => {
+      const day = { day: name, ...emptyMetrics(), tools: emptyTools(), visitors: [], toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])), eventLogCount: 0, legacyReadCount: 0, metadataReadCount: 0 };
+      let cursor = '';
+      do {
+        const res = await fetch('/api/stats-data?day=' + encodeURIComponent(name) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { cache: 'no-store' });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'STATS_DATA_FAILED');
+        mergeChunk(day, data.summary);
+        cursor = data.cursor || '';
+        onProgress();
+      } while (cursor);
+      day.unique_visitor = uniq(day.visitors);
+      TOOLS.forEach((tool) => { day.tools[tool].unique_visitor = uniq(day.toolVisitors[tool]); });
+      return day;
+    };
+
+    const render = (days) => {
+      const today = days[0] || { ...emptyMetrics(), tools: emptyTools() };
+      const totals = emptyMetrics();
+      const totalTools = emptyTools();
+      days.forEach((day) => { addMetrics(totals, day); addTools(totalTools, day.tools); });
+      const processedTotal = sum(totals, ['process_success', 'batch_item_success']);
+      const errors = sum(totals, ['process_error', 'batch_item_error']);
+      const exportedToday = sum(today, ['download', 'download_zip']);
+      const exportedTotal = sum(totals, ['download', 'download_zip']);
+      document.getElementById('metrics').innerHTML = [
+        card('今日独立访客', today.unique_visitor, '访问会话 ' + fmt(today.session_start)),
+        card('今天上传', today.image_uploaded, '处理成功 ' + fmt(sum(today, ['process_success', 'batch_item_success']))),
+        card('今天导出图片', exportedToday, 'ZIP 内图片 ' + fmt(today.download_zip)),
+        card('累计独立访客', totals.unique_visitor, '累计会话 ' + fmt(totals.session_start)),
+        card('累计上传', totals.image_uploaded, '成功处理 ' + fmt(processedTotal)),
+        card('累计导出图片', exportedTotal, '处理错误率 ' + percent(errors, processedTotal + errors)),
+      ].join('');
+
+      document.getElementById('toolRows').innerHTML = ['upscale', 'converter', 'product_image'].map((tool) => {
+        const total = totalTools[tool] || emptyMetrics();
+        const todayValue = today.tools?.[tool] || emptyMetrics();
+        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(sum(total, ['download', 'download_zip'])) + ' / ' + fmt(sum(todayValue, ['download', 'download_zip'])) + '</td></tr>';
+      }).join('');
+
+      const recent = [...days].reverse();
+      const visitMax = Math.max(1, ...days.map((day) => day.page_view || 0));
+      const uploadMax = Math.max(1, ...days.map((day) => day.image_uploaded || 0));
+      const exportMax = Math.max(1, ...days.map((day) => sum(day, ['download', 'download_zip'])));
+      document.getElementById('dayRows').innerHTML = recent.map((day) => {
+        const processed = sum(day, ['process_success', 'batch_item_success']);
+        const exported = sum(day, ['download', 'download_zip']);
+        return '<tr><td>' + day.day + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td></tr>';
+      }).join('');
+
+      document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(today[event]) + '</td></tr>').join('');
+      const eventLogs = days.reduce((total, day) => total + day.eventLogCount, 0);
+      const legacyReads = days.reduce((total, day) => total + day.legacyReadCount, 0);
+      const metadataReads = days.reduce((total, day) => total + day.metadataReadCount, 0);
+      document.getElementById('note').textContent = '口径说明：准确来访量以“独立访客”为准；访问会话为 session_start 事件数。已读取原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。';
+    };
+
+    (async () => {
+      const status = document.getElementById('status');
+      let chunks = 0;
+      const days = [];
+      for (let i = 0; i < 30; i += 1) {
+        const name = dayText(i);
+        status.textContent = '读取 ' + name;
+        days.push(await loadDay(name, () => { chunks += 1; status.textContent = '已读 ' + chunks + ' 批'; }));
+        render(days);
+      }
+      status.textContent = '统计正常';
+      status.className = 'status ok';
+    })().catch((error) => {
+      const status = document.getElementById('status');
+      status.textContent = '统计读取失败';
+      status.className = 'status warn';
+      document.getElementById('note').textContent = '统计读取失败：' + (error?.message || error);
+    });
+  </script>
+</body>
+</html>`
+
 export async function onRequestGet(context) {
   const requestUrl = new URL(context.request.url)
   const accept = context.request.headers.get('accept') || ''
@@ -511,6 +679,8 @@ export async function onRequestGet(context) {
     || accept.includes('text/html')
   const wantsJson = requestUrl.searchParams.get('format') === 'json'
   const wantsDebug = requestUrl.searchParams.get('debug') === '1'
+
+  if (wantsHtml && !wantsJson) return html(renderStatsShell())
 
   try {
     const kv = context.env.TUSCALE_ANALYTICS

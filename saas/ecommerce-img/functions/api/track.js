@@ -17,6 +17,7 @@ const ALLOWED_EVENTS = new Set([
 const ID_PATTERN = /^[a-z]_[a-zA-Z0-9-]{8,80}$/
 const EVENT_LOG_TTL = 60 * 60 * 24 * 60
 const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image'])
+const MAX_BATCH_EVENTS = 5
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -30,16 +31,39 @@ const getChinaDate = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString
 
 const normalizeTool = (tool) => ALLOWED_TOOLS.has(tool) ? tool : 'unknown'
 
-const writeEventLog = async (kv, { day, event, amount, visitorId, sessionId, tool }) => {
-  const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const key = `event:${day}:${Date.now()}:${id}`
-  await kv.put(key, JSON.stringify({
+const normalizeEventPayload = (item) => {
+  const event = String(item?.event || '').trim()
+  if (!ALLOWED_EVENTS.has(event)) return null
+
+  const data = item?.data || {}
+  const rawCount = Number(data.count || 1)
+  const amount = Math.max(1, Math.min(Number.isFinite(rawCount) ? Math.round(rawCount) : 1, 100))
+  const visitorId = String(data.visitorId || '').trim()
+  const sessionId = String(data.sessionId || '').trim()
+  const tool = normalizeTool(String(data.tool || '').trim())
+
+  return {
     event,
     amount,
-    tool: normalizeTool(tool),
+    tool,
     visitorId: ID_PATTERN.test(visitorId) ? visitorId : '',
     sessionId: ID_PATTERN.test(sessionId) ? sessionId : '',
-  }), { expirationTtl: EVENT_LOG_TTL })
+  }
+}
+
+const writeEventLog = async (kv, { day, events }) => {
+  const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const key = `event:${day}:${Date.now()}:${id}`
+  const body = events.length === 1
+    ? events[0]
+    : { version: 2, events }
+  await kv.put(key, JSON.stringify(body), {
+    expirationTtl: EVENT_LOG_TTL,
+    metadata: {
+      version: 2,
+      events,
+    },
+  })
 }
 
 export async function onRequestPost(context) {
@@ -53,19 +77,18 @@ export async function onRequestPost(context) {
     return json({ ok: false, error: 'INVALID_JSON' }, 400)
   }
 
-  const event = String(body?.event || '').trim()
-  if (!ALLOWED_EVENTS.has(event)) return json({ ok: false, error: 'INVALID_EVENT' }, 400)
-
-  const rawCount = Number(body?.data?.count || 1)
-  const amount = Math.max(1, Math.min(Number.isFinite(rawCount) ? Math.round(rawCount) : 1, 100))
   const day = getChinaDate()
-  const visitorId = String(body?.data?.visitorId || '').trim()
-  const sessionId = String(body?.data?.sessionId || '').trim()
-  const tool = normalizeTool(String(body?.data?.tool || '').trim())
+  const rawEvents = Array.isArray(body?.events) ? body.events : [body]
+  const events = rawEvents
+    .slice(0, MAX_BATCH_EVENTS)
+    .map(normalizeEventPayload)
+    .filter(Boolean)
 
-  await writeEventLog(kv, { day, event, amount, visitorId, sessionId, tool })
+  if (!events.length) return json({ ok: false, error: 'INVALID_EVENT' }, 400)
 
-  return json({ ok: true })
+  await writeEventLog(kv, { day, events })
+
+  return json({ ok: true, count: events.length })
 }
 
 export function onRequestOptions() {

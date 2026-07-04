@@ -44,6 +44,11 @@ export const revokeObjectUrl = (url) => {
 
 const ANALYTICS_VISITOR_KEY = 'tuscale_visitor_id'
 const ANALYTICS_SESSION_KEY = 'tuscale_session_id'
+const ANALYTICS_BATCH_SIZE = 5
+const ANALYTICS_FLUSH_DELAY = 1200
+let analyticsQueue = []
+let analyticsFlushTimer = null
+let analyticsListenersReady = false
 
 const createAnalyticsId = (prefix) => {
   const random = crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
@@ -73,21 +78,15 @@ const getAnalyticsIdentity = () => {
 
 const inferTool = () => {
   if (typeof window === 'undefined') return 'unknown'
+  if (window.location.pathname === '/product-image') return 'product_image'
   return window.location.pathname === '/format-converter' ? 'converter' : 'upscale'
 }
 
-export const trackEvent = (event, data = {}) => {
+const sendAnalyticsEvents = (events, useBeacon = false) => {
   if (typeof window === 'undefined') return
-  const payload = JSON.stringify({
-    event,
-    data: {
-      tool: inferTool(),
-      ...data,
-      ...getAnalyticsIdentity(),
-    },
-  })
+  const payload = JSON.stringify({ events })
   try {
-    if (navigator.sendBeacon) {
+    if (useBeacon && navigator.sendBeacon) {
       const blob = new Blob([payload], { type: 'application/json' })
       navigator.sendBeacon('/api/track', blob)
       return
@@ -100,6 +99,46 @@ export const trackEvent = (event, data = {}) => {
     }).catch(() => {})
   } catch {
     // Analytics should never interrupt image processing.
+  }
+}
+
+const flushAnalytics = (useBeacon = false) => {
+  if (analyticsFlushTimer) {
+    clearTimeout(analyticsFlushTimer)
+    analyticsFlushTimer = null
+  }
+  if (!analyticsQueue.length) return
+  const events = analyticsQueue
+  analyticsQueue = []
+  sendAnalyticsEvents(events, useBeacon)
+}
+
+const ensureAnalyticsFlushListeners = () => {
+  if (analyticsListenersReady || typeof window === 'undefined') return
+  analyticsListenersReady = true
+  window.addEventListener('pagehide', () => flushAnalytics(true))
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushAnalytics(true)
+  })
+}
+
+export const trackEvent = (event, data = {}) => {
+  if (typeof window === 'undefined') return
+  ensureAnalyticsFlushListeners()
+  analyticsQueue.push({
+    event,
+    data: {
+      tool: inferTool(),
+      ...data,
+      ...getAnalyticsIdentity(),
+    },
+  })
+  if (analyticsQueue.length >= ANALYTICS_BATCH_SIZE) {
+    flushAnalytics()
+    return
+  }
+  if (!analyticsFlushTimer) {
+    analyticsFlushTimer = setTimeout(() => flushAnalytics(), ANALYTICS_FLUSH_DELAY)
   }
 }
 
