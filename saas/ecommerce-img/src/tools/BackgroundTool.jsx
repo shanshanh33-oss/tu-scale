@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Upload, Download, Loader2, Sparkles, CheckCircle, AlertCircle, Brush, Eraser, RotateCcw } from 'lucide-react'
 import JSZip from 'jszip'
+import RewardButton from './RewardButton'
 import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, revokeObjectUrl, trackEvent } from './shared'
 
 const mb = (value) => value * 1024 * 1024
@@ -64,6 +65,13 @@ const MONTHLY_VOLUMES = [
   { value: '11-50', label: '11-50 张/月' },
   { value: '51-200', label: '51-200 张/月' },
   { value: '200+', label: '200 张以上/月' },
+]
+
+const PRODUCT_IMAGE_FAQ = [
+  ['商品图规范化免费吗？', '尺寸规范化、裁切、留白和格式导出都可以免费在浏览器本地处理；AI 抠图属于付费 API 测试功能，目前限制每个 IP 每天试用 1 张。'],
+  ['图片会上传服务器吗？', '普通商品图规范化在浏览器本地完成，不上传图片。只有你主动使用 AI 抠图时，才会把当前图片发送到抠图服务处理。'],
+  ['适合哪些平台？', '页面内置淘宝/天猫、拼多多、抖店、京东、1688、快手小店、Amazon 等常见尺寸，可按平台选择预设后批量导出。'],
+  ['白底图主体占比不准怎么办？', '浅色商品或白衣服可能会影响自动识别，可以进入调整工作区手动框选主体范围，再生成规范图。'],
 ]
 
 const MAX_BATCH_NORMALIZE_FILES = 50
@@ -2256,7 +2264,42 @@ export default function BackgroundTool({ navigate }) {
           </div>
         </section>
 
+        <section className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900">工具介绍</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              商品图规范化用于把原始商品照片整理成平台可用的主图、白底图、长图或详情图尺寸。普通裁切、留白、压缩和批量导出都在本地浏览器完成，适合先快速检查图片是否符合常见平台尺寸。
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {[
+                ['平台预设', '内置淘宝、拼多多、抖店、京东、1688、快手和 Amazon 常用尺寸。'],
+                ['批量规范', '可一次导入多张图片，统一输出尺寸、格式和主体占比。'],
+                ['白底调整', '浅色底商品可手动框选主体，减少留白过多或主体过小的问题。'],
+                ['导出控制', '支持 JPG、PNG、WebP，并尽量按平台体积限制压缩。'],
+              ].map(([title, text]) => (
+                <div key={title} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm font-semibold text-slate-800">{title}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900">常见问题</h2>
+            <div className="mt-4 space-y-3">
+              {PRODUCT_IMAGE_FAQ.map(([question, answer]) => (
+                <div key={question} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm font-semibold text-slate-800">{question}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{answer}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
       </main>
+      <RewardButton />
     </div>
   )
 }

@@ -2399,6 +2399,13 @@ const batchItemsRef = useRef([])
               </div>
               <p className="text-xs leading-6 text-gray-500 mt-1">批量转换 JPG、PNG、WebP、AVIF，支持质量调节和 ZIP 下载。</p>
             </button>
+            <button onClick={() => navigate('/product-image')}
+              className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
+              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                <Sparkles className="w-4 h-4 text-indigo-500" /> 商品图规范化
+              </div>
+              <p className="text-xs leading-6 text-gray-500 mt-1">把商品图整理成平台常用尺寸、白底留白和可下载格式。</p>
+            </button>
             <button onClick={() => navigate('/contact')}
               className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
