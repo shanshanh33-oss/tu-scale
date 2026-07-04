@@ -25,6 +25,8 @@ export default function ContactPage({ navigate }) {
   const [copied, setCopied] = useState(false)
   const [emailCopied, setEmailCopied] = useState(false)
   const [mailNotice, setMailNotice] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitNotice, setSubmitNotice] = useState('')
 
   const feedbackText = useMemo(() => {
     const label = FEEDBACK_TYPES.find(item => item.id === type)?.label || '反馈'
@@ -50,6 +52,43 @@ export default function ContactPage({ navigate }) {
     await navigator.clipboard.writeText(CONTACT_EMAIL)
     setEmailCopied(true)
     setTimeout(() => setEmailCopied(false), 1800)
+  }
+
+  const submitFeedback = async () => {
+    if (message.trim().length < 3) {
+      setSubmitNotice('请先写一点反馈内容。')
+      return
+    }
+
+    setSubmitting(true)
+    setSubmitNotice('')
+    try {
+      const response = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type,
+          message,
+          contact,
+          page: window.location.href,
+        }),
+      })
+      const result = await response.json().catch(() => ({}))
+      if (response.ok && result.ok) {
+        setSubmitNotice('已提交，感谢你的反馈。')
+        setMessage('')
+        return
+      }
+      if (result.error === 'KV_NOT_CONFIGURED') {
+        setSubmitNotice('表单接口已连通，但线上还没有配置存储。请先复制内容发到邮箱。')
+        return
+      }
+      setSubmitNotice('提交失败，请稍后再试，或复制内容发到邮箱。')
+    } catch {
+      setSubmitNotice('提交失败，请检查网络，或复制内容发到邮箱。')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const openMail = () => {
@@ -107,18 +146,24 @@ export default function ContactPage({ navigate }) {
                   className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10" />
               </label>
               <div className="flex flex-col sm:flex-row gap-2">
+                <button onClick={submitFeedback} disabled={submitting}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60">
+                  {submitting ? <Send className="w-4 h-4 animate-pulse" /> : <Send className="w-4 h-4" />}
+                  {submitting ? '提交中' : '提交反馈'}
+                </button>
                 <button onClick={copyFeedback}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold">
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-semibold">
                   {copied ? <CheckCircle className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   {copied ? '已复制' : '复制反馈内容'}
                 </button>
                 <button onClick={openMail}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-semibold">
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 bg-white text-gray-700 text-sm font-semibold hover:bg-gray-50">
                   <Send className="w-4 h-4" /> 尝试打开邮件 App
                 </button>
               </div>
+              {submitNotice && <p className="text-xs leading-6 text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">{submitNotice}</p>}
               {mailNotice && <p className="text-xs leading-6 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">{mailNotice}</p>}
-              <p className="text-xs leading-6 text-gray-500">浏览器不能直接替用户发送邮件；真正一键提交需要接入后端邮件服务或表单服务，并增加防垃圾提交保护。</p>
+              <p className="text-xs leading-6 text-gray-500">提交内容会用于改进功能和判断付费需求；也可以复制内容后手动发邮件。</p>
             </div>
 
             <aside className="border border-gray-200 rounded-xl bg-gray-50 p-4 space-y-3">

@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/api/remove-bg': 'http://127.0.0.1:5180',
       '/api/survey': 'http://127.0.0.1:5180',
+      '/api/contact': 'http://127.0.0.1:5180',
     },
   },
 })

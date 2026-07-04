@@ -5,6 +5,7 @@ const path = require('path')
 const PORT = Number(process.env.REMOVE_BG_PORT || 5180)
 const SURVEY_LOG = path.join(__dirname, '..', 'tmp-survey.jsonl')
 const USAGE_LOG = path.join(__dirname, '..', 'tmp-removebg-usage.jsonl')
+const CONTACT_LOG = path.join(__dirname, '..', 'tmp-contact.jsonl')
 
 const loadLocalEnv = () => {
   const envPath = path.join(__dirname, '..', '.env.local')
@@ -211,12 +212,30 @@ const handleSurveyResults = async (req, res) => {
   })
 }
 
+const clean = (value, max = 1000) => String(value || '').trim().slice(0, max)
+
+const handleContact = async (req, res) => {
+  const body = await readJson(req)
+  const record = {
+    type: clean(body.type, 40) || 'feature',
+    message: clean(body.message, 2000),
+    contact: clean(body.contact, 160),
+    page: clean(body.page, 200),
+    createdAt: new Date().toISOString(),
+  }
+  if (record.message.length < 3) return json(res, 400, { ok: false, error: 'MESSAGE_REQUIRED' })
+
+  fs.appendFileSync(CONTACT_LOG, `${JSON.stringify(record)}\n`)
+  json(res, 200, { ok: true, configured: true, localLog: CONTACT_LOG })
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return json(res, 200, { ok: true })
   try {
     if (req.method === 'POST' && req.url === '/api/remove-bg/photoroom') return await handlePhotoroom(req, res)
     if (req.method === 'POST' && req.url === '/api/remove-bg/removebg') return await handleRemoveBg(req, res)
     if (req.method === 'POST' && req.url === '/api/survey') return await handleSurvey(req, res)
+    if (req.method === 'POST' && req.url === '/api/contact') return await handleContact(req, res)
     if (req.method === 'GET' && req.url === '/api/survey-results') return await handleSurveyResults(req, res)
     json(res, 404, { error: 'NOT_FOUND' })
   } catch (error) {

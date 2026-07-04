@@ -156,13 +156,6 @@ const PAGE_META = {
   },
 }
 
-const HOME_FAQ = [
-  ['TU Scale 免费吗？', '目前可以免费使用，无需登录，适合临时处理图片、头像、截图和自媒体封面。'],
-  ['图片会上传到服务器吗？', '不会。放大、裁切、格式转换主要在浏览器本地完成，TU Scale 不收集图片内容和文件名。'],
-  ['适合哪些图片？', '适合模糊图片清晰化、头像、封面、截图、网页配图和需要统一尺寸的批量图片。'],
-  ['支持批量处理吗？', '支持多选图片和上传文件夹，处理完成后可以单张下载，也可以打包下载 ZIP。'],
-]
-
  function App() {
   const [route, setRoute] = useState(() => window.location.pathname)
 
@@ -212,7 +205,7 @@ const HOME_FAQ = [
   const [deblur, setDeblur] = useState(false)
   const [autoLevels, setAutoLevels] = useState(false)
   const [vibrance, setVibrance] = useState(false)
-  const [clahe, setClahe] = useState(false)
+  const [clahe] = useState(false)
   const [smartDenoise, setSmartDenoise] = useState(false)
   const [edgeInterpolation, setEdgeInterpolation] = useState(false)
   const [antiAlias, setAntiAlias] = useState(false)
@@ -237,9 +230,8 @@ const HOME_FAQ = [
   const [showModal, setShowModal] = useState(false)
   const [modalMode, setModalMode] = useState('compare')
   const [compareZoom, setCompareZoom] = useState(1)
-  const [imgZoom, setImgZoom] = useState(1)
-  const [imgPan, setImgPan] = useState({ x: 0, y: 0 })
-  const [isPanning, setIsPanning] = useState(false)
+  const [, setImgZoom] = useState(1)
+  const [, setImgPan] = useState({ x: 0, y: 0 })
   const [shareNotice, setShareNotice] = useState('')
     // --- 预加载 AI 模型 ---
     useEffect(() => {
@@ -292,8 +284,6 @@ const HOME_FAQ = [
   const [fileNameTemplate, setFileNameTemplate] = useState('{name}_{w}x{h}')
   const [dragOverIdx, setDragOverIdx] = useState(null)
 
-  const panStart = useRef({ x: 0, y: 0 })
-  const panOrigin = useRef({ x: 0, y: 0 })
   const fileRef = useRef(null)
   const folderRef = useRef(null)
   const cropStageRef = useRef(null)
@@ -314,11 +304,6 @@ const batchItemsRef = useRef([])
   const rightScrollRef = useRef(null)
   const syncingRef = useRef(false)
   const [syncedScroll, setSyncedScroll] = useState(true)
-  const leftImgRef = useRef(null)
-  const rightImgRef = useRef(null)
-  const leftViewer = useRef({ z:1, x:0, y:0, drag:false, mx:0, my:0, sx:0, sy:0 })
-  const rightViewer = useRef({ z:1, x:0, y:0, drag:false, mx:0, my:0, sx:0, sy:0 })
-  const compareZoomRef = useRef(1)
   const singleViewer = useRef({ z:1, x:0, y:0, drag:false, mx:0, my:0, sx:0, sy:0 })
   const singleImgRef = useRef(null)
   const fsLeftScrollRef = useRef(null)
@@ -400,7 +385,9 @@ const batchItemsRef = useRef([])
         if (s.customH) setCustomH(s.customH)
         if (s.fileNameTemplate) setFileNameTemplate(s.fileNameTemplate)
       }
-    } catch (_) {}
+    } catch {
+      // Ignore malformed saved settings and continue with defaults.
+    }
   }, [])
 
   // --- 保存设置到 localStorage ---
@@ -1012,7 +999,7 @@ const batchItemsRef = useRef([])
   }
 
   // --- Unsharp Mask（反锐化掩模，比简单卷积锐化效果好得多）---
-  const unsharpMask = (imageData, amount = 0.8, radius = 1) => {
+  const unsharpMask = (imageData, amount = 0.8) => {
     const { data, width, height } = imageData
     const luma = new Float32Array(width * height)
     const blurred = new Float32Array(width * height)
@@ -1111,155 +1098,6 @@ const batchItemsRef = useRef([])
     return new ImageData(output, width, height)
   }
 
-  // --- CLAHE 自适应直方图均衡 ---
-  const claheFilter = (imageData, clipLimit = 3, tileSize = 8) => {
-    const { data, width, height } = imageData
-    const output = new Uint8ClampedArray(data)
-
-    for (let c = 0; c < 3; c++) {
-      const tilesX = Math.ceil(width / tileSize)
-      const tilesY = Math.ceil(height / tileSize)
-      const cdfs = []
-
-      // Compute CDF for each tile
-      for (let ty = 0; ty < tilesY; ty++) {
-        for (let tx = 0; tx < tilesX; tx++) {
-          const hist = new Array(256).fill(0)
-          const startY = ty * tileSize, endY = Math.min(startY + tileSize, height)
-          const startX = tx * tileSize, endX = Math.min(startX + tileSize, width)
-          let total = 0
-          for (let y = startY; y < endY; y++)
-            for (let x = startX; x < endX; x++) {
-              hist[data[(y * width + x) * 4 + c]]++
-              total++
-            }
-
-          // Clip histogram
-          let clipped = 0
-          const clipVal = (endX - startX) * (endY - startY) / 256 * clipLimit
-          for (let i = 0; i < 256; i++) {
-            if (hist[i] > clipVal) { clipped += hist[i] - clipVal; hist[i] = clipVal }
-          }
-          for (let i = 0; i < 256; i++) hist[i] += clipped / 256
-
-          // Compute CDF
-          const cdf = []
-          let sum = 0
-          for (let i = 0; i < 256; i++) { sum += hist[i]; cdf.push(sum * 255 / total) }
-          cdfs.push(cdf)
-        }
-      }
-
-      // Apply with bilinear interpolation between tiles
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const val = data[(y * width + x) * 4 + c]
-          const tx = x / tileSize, ty = y / tileSize
-          const tx0 = Math.min(Math.floor(tx), tilesX - 2)
-          const ty0 = Math.min(Math.floor(ty), tilesY - 2)
-          const tx1 = tx0 + 1, ty1 = ty0 + 1
-          const fx = tx - tx0, fy = ty - ty0
-
-          const v00 = cdfs[ty0 * tilesX + tx0][val]
-          const v10 = cdfs[ty0 * tilesX + tx1][val]
-          const v01 = cdfs[ty1 * tilesX + tx0][val]
-          const v11 = cdfs[ty1 * tilesX + tx1][val]
-
-          const v0 = v00 + (v10 - v00) * fx
-          const v1 = v01 + (v11 - v01) * fx
-          output[(y * width + x) * 4 + c] = Math.round(v0 + (v1 - v0) * fy)
-        }
-      }
-    }
-    return new ImageData(output, width, height)
-  }
-
-  // --- 智能去噪（方差感知降噪）---
-  const smartDenoiseFilter = (imageData, strength = 3) => {
-    const { data, width, height } = imageData
-    const output = new Uint8ClampedArray(data)
-
-    for (let y = 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
-        const idx = (y * width + x) * 4
-        for (let c = 0; c < 3; c++) {
-          const vals = []
-          for (let ky = -1; ky <= 1; ky++)
-            for (let kx = -1; kx <= 1; kx++)
-              vals.push(data[((y + ky) * width + (x + kx)) * 4 + c])
-          const mean = vals.reduce((a, b) => a + b, 0) / vals.length
-          const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length
-
-          // Low variance = smooth area = apply blur
-          // High variance = edge = keep original
-          const noiseFactor = Math.max(0, Math.min(1, 1 - variance / (200 * strength)))
-          const center = data[idx + c]
-          output[idx + c] = Math.round(center + (mean - center) * noiseFactor)
-        }
-        output[idx + 3] = 255
-      }
-    }
-    return new ImageData(output, width, height)
-  }
-
-  // --- 边缘导向插值（更好的放大算法）---
-  const edgeInterpolationFilter = (srcData, srcW, srcH, dstW, dstH) => {
-    const output = new Uint8ClampedArray(dstW * dstH * 4)
-    const sx = srcW / dstW, sy = srcH / dstH
-
-    // Precompute source gradient map for edge detection
-    const gradMap = new Float32Array(srcW * srcH)
-    for (let y = 1; y < srcH - 1; y++)
-      for (let x = 1; x < srcW - 1; x++) {
-        const idx = y * srcW + x
-        const gx = Math.abs(srcData[((y) * srcW + (x + 1)) * 4] - srcData[((y) * srcW + (x - 1)) * 4])
-        const gy = Math.abs(srcData[((y + 1) * srcW + (x)) * 4] - srcData[((y - 1) * srcW + (x)) * 4])
-        gradMap[idx] = Math.sqrt(gx * gx + gy * gy)
-      }
-
-    // Lanczos-like interpolation for larger upscales
-    const lanczosWeight = (t, a = 3) => {
-      if (t === 0) return 1
-      if (Math.abs(t) >= a || Math.abs(t) < 1e-10) return 0
-      const pt = Math.PI * t
-      return a * Math.sin(pt) * Math.sin(pt / a) / (pt * pt)
-    }
-
-    for (let ty = 0; ty < dstH; ty++) {
-      for (let tx = 0; tx < dstW; tx++) {
-        const fx = (tx + 0.5) * sx - 0.5
-        const fy = (ty + 0.5) * sy - 0.5
-        const ix = Math.floor(fx), iy = Math.floor(fy)
-        const oidx = (ty * dstW + tx) * 4
-
-        // Use Lanczos for better quality
-        const a = 2
-        for (let c = 0; c < 3; c++) {
-          let sum = 0, wsum = 0
-          for (let dy = -a + 1; dy <= a; dy++) {
-            for (let dx = -a + 1; dx <= a; dx++) {
-              const sx2 = ix + dx, sy2 = iy + dy
-              if (sx2 < 0 || sx2 >= srcW || sy2 < 0 || sy2 >= srcH) continue
-              const w = lanczosWeight(fx - sx2) * lanczosWeight(fy - sy2)
-              sum += srcData[(sy2 * srcW + sx2) * 4 + c] * w
-              wsum += w
-            }
-          }
-          if (wsum > 0) {
-            output[oidx + c] = Math.max(0, Math.min(255, Math.round(sum / wsum)))
-          } else {
-            // Fallback: nearest neighbor for edge pixels
-            const nx = Math.max(0, Math.min(srcW - 1, Math.round(fx)))
-            const ny = Math.max(0, Math.min(srcH - 1, Math.round(fy)))
-            output[oidx + c] = srcData[(ny * srcW + nx) * 4 + c]
-          }
-        }
-        output[oidx + 3] = 255
-      }
-    }
-    return new ImageData(output, dstW, dstH)
-  }
-
   // --- 抗锯齿过滤（针对楼梯状锯齿边缘做定向平滑）---
   const antiAliasingFilter = (imageData, strength = 0.6) => {
     const { data, width, height } = imageData
@@ -1333,32 +1171,6 @@ const batchItemsRef = useRef([])
             }
           }
           output[ci + c] = Math.max(0, Math.min(255, Math.round(total / tw)))
-        }
-      }
-    }
-    return new ImageData(output, width, height)
-  }
-
-  // --- 自适应锐化（边缘加强，平滑区不动）---
-  const adaptiveSharpen = (imageData, strength = 0.6) => {
-    const { data, width, height } = imageData
-    const output = new Uint8ClampedArray(data)
-    for (let y = 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
-        const idx = (y * width + x) * 4
-        for (let c = 0; c < 3; c++) {
-          // 计算 3x3 局部方差
-          const vals = []
-          for (let ky = -1; ky <= 1; ky++)
-            for (let kx = -1; kx <= 1; kx++)
-              vals.push(data[((y + ky) * width + (x + kx)) * 4 + c])
-          const mean = vals.reduce((a, b) => a + b, 0) / vals.length
-          const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length
-          const edgeFactor = Math.min(1, variance / 2000)
-          const center = data[idx + c]
-          const sum = vals.reduce((a, b) => a + b, 0) - center
-          const blur = sum / (vals.length - 1)
-          output[idx + c] = Math.max(0, Math.min(255, center + edgeFactor * strength * (center - blur)))
         }
       }
     }
@@ -2372,18 +2184,6 @@ const batchItemsRef = useRef([])
           </div>
         )}
 
-        <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          <div>
-            <h2 className="font-semibold text-gray-900 text-sm">常见问题</h2>
-            <p className="text-xs text-gray-500 mt-1">用户最关心的价格、隐私、批量和格式转换。</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {HOME_FAQ.map(([question, answer]) => (
-              <FaqItem key={question} question={question} answer={answer} />
-            ))}
-          </div>
-        </section>
-
         <section className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
@@ -2563,15 +2363,6 @@ const batchItemsRef = useRef([])
           <div className="text-center py-2 text-white/25 text-[11px] shrink-0 bg-black/40">{'\u6eda\u52a8\u67e5\u770b\u7ec6\u8282 \u00b7 \u6ed1\u5757\u7f29\u653e \u00b7 \u8054\u52a8\u6eda\u52a8\u53ef\u5f00\u5173 \u00b7 \u70b9\u51fb\u7a7a\u767d\u5173\u95ed'}</div>
         </div>
       )}
-    </div>
-  )
-}
-
-function FaqItem({ question, answer }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-      <h3 className="text-sm font-semibold text-gray-900">{question}</h3>
-      <p className="text-xs leading-6 text-gray-500 mt-1">{answer}</p>
     </div>
   )
 }

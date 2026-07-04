@@ -172,48 +172,6 @@ const imageToCanvas = async (src) => {
   return canvas
 }
 
-const normalizeToPreset = async (src, preset, background = '#ffffff', padding = 0.12) => {
-  const img = await readImage(src)
-  const canvas = document.createElement('canvas')
-  canvas.width = preset.w
-  canvas.height = preset.h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = background
-  ctx.fillRect(0, 0, preset.w, preset.h)
-  const availableW = preset.w * (1 - padding * 2)
-  const availableH = preset.h * (1 - padding * 2)
-  const scale = Math.min(availableW / img.width, availableH / img.height)
-  const dw = Math.max(1, Math.round(img.width * scale))
-  const dh = Math.max(1, Math.round(img.height * scale))
-  const dx = Math.round((preset.w - dw) / 2)
-  const dy = Math.round((preset.h - dh) / 2)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(img, dx, dy, dw, dh)
-  return canvas
-}
-
-const normalizeWholeImageCanvas = async (src, preset, fillRatio = 0.82) => {
-  const img = await readImage(src)
-  const canvas = document.createElement('canvas')
-  canvas.width = preset.w
-  canvas.height = preset.h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, preset.w, preset.h)
-  const targetW = preset.w * fillRatio
-  const targetH = preset.h * fillRatio
-  const scale = Math.min(targetW / img.width, targetH / img.height)
-  const dw = Math.max(1, Math.round(img.width * scale))
-  const dh = Math.max(1, Math.round(img.height * scale))
-  const dx = Math.round((preset.w - dw) / 2)
-  const dy = Math.round((preset.h - dh) / 2)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(img, dx, dy, dw, dh)
-  return { canvas, placement: { dx, dy, dw, dh } }
-}
-
 const resizeExactCanvas = async (src, preset) => {
   const img = await readImage(src)
   const canvas = document.createElement('canvas')
@@ -224,49 +182,6 @@ const resizeExactCanvas = async (src, preset) => {
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(img, 0, 0, preset.w, preset.h)
   return { canvas }
-}
-
-const normalizeSubjectBoundsCanvas = async (src, preset, bounds, fillRatio = 0.82, background = '#ffffff') => {
-  const img = await readImage(src)
-  const canvas = document.createElement('canvas')
-  canvas.width = preset.w
-  canvas.height = preset.h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = typeof background === 'string' ? background : toRgb(background)
-  ctx.fillRect(0, 0, preset.w, preset.h)
-  const sourceBounds = bounds || { x: 0, y: 0, w: img.width, h: img.height }
-  const targetW = preset.w * fillRatio
-  const targetH = preset.h * fillRatio
-  const scale = Math.min(targetW / sourceBounds.w, targetH / sourceBounds.h)
-  const dw = Math.max(1, Math.round(sourceBounds.w * scale))
-  const dh = Math.max(1, Math.round(sourceBounds.h * scale))
-  const dx = Math.round((preset.w - dw) / 2)
-  const dy = Math.round((preset.h - dh) / 2)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(img, sourceBounds.x, sourceBounds.y, sourceBounds.w, sourceBounds.h, dx, dy, dw, dh)
-  return { canvas, placement: { dx, dy, dw, dh } }
-}
-
-const normalizeSubjectBoundsFromCanvas = (sourceCanvas, preset, bounds, fillRatio = 0.82, background = '#ffffff') => {
-  const canvas = document.createElement('canvas')
-  canvas.width = preset.w
-  canvas.height = preset.h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = typeof background === 'string' ? background : toRgb(background)
-  ctx.fillRect(0, 0, preset.w, preset.h)
-  const sourceBounds = bounds || { x: 0, y: 0, w: sourceCanvas.width, h: sourceCanvas.height }
-  const targetW = preset.w * fillRatio
-  const targetH = preset.h * fillRatio
-  const scale = Math.min(targetW / sourceBounds.w, targetH / sourceBounds.h)
-  const dw = Math.max(1, Math.round(sourceBounds.w * scale))
-  const dh = Math.max(1, Math.round(sourceBounds.h * scale))
-  const dx = Math.round((preset.w - dw) / 2)
-  const dy = Math.round((preset.h - dh) / 2)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(sourceCanvas, sourceBounds.x, sourceBounds.y, sourceBounds.w, sourceBounds.h, dx, dy, dw, dh)
-  return { canvas, placement: { dx, dy, dw, dh } }
 }
 
 const scaleCanvasBySubjectBounds = (sourceCanvas, preset, bounds, fillRatio = 0.82, background = '#ffffff') => {
@@ -767,9 +682,8 @@ export default function BackgroundTool({ navigate }) {
   const [resultSize, setResultSize] = useState(0)
   const [normalizePresetId, setNormalizePresetId] = useState('universal-main')
   const [normalizeFillRatio, setNormalizeFillRatio] = useState(82)
-  const [normalizeMode, setNormalizeMode] = useState('auto')
+  const [, setNormalizeMode] = useState('auto')
   const [normalizePanel, setNormalizePanel] = useState('summary')
-  const [cropAnchor, setCropAnchor] = useState({ x: 50, y: 50 })
   const [cropRect, setCropRect] = useState({ x: 0, y: 0, w: 1, h: 1 })
   const [cropDrag, setCropDrag] = useState(null)
   const [subjectRect, setSubjectRect] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 })
@@ -796,7 +710,7 @@ export default function BackgroundTool({ navigate }) {
   const [previewZoom, setPreviewZoom] = useState(1)
   const [cutoutUrl, setCutoutUrl] = useState('')
   const [sourceUrl, setSourceUrl] = useState('')
-  const [composeInfo, setComposeInfo] = useState(null)
+  const [, setComposeInfo] = useState(null)
   const [processing, setProcessing] = useState(false)
   const [cutoutStatus, setCutoutStatus] = useState('')
   const [normalizeStatus, setNormalizeStatus] = useState('')
