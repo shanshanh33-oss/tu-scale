@@ -17,7 +17,7 @@ const QUALITY_PRESETS = [
 
 const TOOL_NAV = [
   { id: 'upscale', label: '图片放大', path: '/' },
-  { id: 'converter', label: '格式转换', path: '/format-converter' },
+  { id: 'converter', label: '图片压缩', path: '/format-converter' },
   { id: 'product-image', label: '商品图规范化', path: '/product-image' },
   { id: 'contact', label: '反馈联系', path: '/contact' },
 ]
@@ -31,6 +31,12 @@ const CROP_PRESETS = [
   { id: '9-16', label: '9:16 竖屏', ratio: 9 / 16, w: 1080, h: 1920 },
   { id: '2-3', label: '2:3 海报', ratio: 2 / 3, w: 1200, h: 1800 },
   { id: 'wechat', label: '公众号头图', ratio: 900 / 383, w: 900, h: 383 },
+]
+
+const FORMAT_OPTIONS = [
+  { value: 'png', label: 'PNG', tip: '保留透明背景，适合截图、图标和线稿；体积通常更大。' },
+  { value: 'jpeg', label: 'JPEG', tip: '适合照片、电商图和证件照；体积小，不保留透明背景。' },
+  { value: 'webp', label: 'WebP', tip: '适合网页展示，画质和体积平衡好；部分平台兼容性略弱。' },
 ]
 
  let batchIdCounter = 0
@@ -140,11 +146,11 @@ const resizeCropRect = (rect, dx, dy, ratio = null) => {
 const PAGE_META = {
   '/': {
     title: '免费图片放大与批量处理工具 - 本地处理不上传 | TU Scale',
-    description: 'TU Scale 是免费在线图片放大工具，支持单图/批量放大、裁切比例、图片清晰化和格式转换。图片在浏览器本地处理，不上传服务器，无需登录。',
+    description: 'TU Scale 是免费在线图片放大工具，支持单图/批量放大、裁切比例、图片清晰化和图片压缩。图片在浏览器本地处理，不上传服务器，无需登录。',
   },
   '/format-converter': {
-    title: '免费图片格式转换 - JPG/PNG/WebP/AVIF 批量转换 | TU Scale',
-    description: 'TU Scale 免费图片格式转换工具，支持 JPG、PNG、WebP、AVIF 批量转换、质量调节和 ZIP 下载。图片本地处理，不上传服务器。',
+    title: '免费图片压缩与尺寸处理 - 批量压缩/证件照预设 | TU Scale',
+    description: 'TU Scale 免费图片压缩工具，支持批量压缩、目标 KB、尺寸预设、自定义裁切和证件照参考线。图片本地处理，不上传服务器。',
   },
   '/product-image': {
     title: '商品图规范化与白底图测试 - TU Scale',
@@ -1502,7 +1508,7 @@ const batchItemsRef = useRef([])
         </div>
 
         <div className="flex sm:hidden flex-wrap gap-2">
-          {['免费使用', '本地处理', '图片不上传', '支持批量', '格式转换'].map(item => (
+          {['免费使用', '本地处理', '图片不上传', '支持批量', '图片压缩'].map(item => (
             <span key={item} className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-xs font-semibold text-gray-500 shadow-sm">{item}</span>
           ))}
         </div>
@@ -1881,14 +1887,21 @@ const batchItemsRef = useRef([])
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500">{'\u683c\u5f0f'}</span>
                 <div className="flex gap-1">
-                  {[{ value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPEG' }, { value: 'webp', label: 'WEBP' }].map((opt) => (
-                    <button key={opt.value}
-                      onClick={() => setFormat(opt.value)}
-                      className={`px-3 py-1 rounded-md text-xs font-medium border ${
-                        format === opt.value
-                          ? 'bg-indigo-50 border-indigo-400 text-indigo-700'
-                          : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                      }`}>{opt.label}</button>
+                  {FORMAT_OPTIONS.map((opt) => (
+                    <span key={opt.value} className="relative group">
+                      <button type="button"
+                        onClick={() => setFormat(opt.value)}
+                        title={opt.tip}
+                        aria-label={`${opt.label}：${opt.tip}`}
+                        className={`px-3 py-1 rounded-md text-xs font-medium border ${
+                          format === opt.value
+                            ? 'bg-indigo-50 border-indigo-400 text-indigo-700'
+                            : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                        }`}>{opt.label}</button>
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-56 -translate-x-1/2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-left text-[11px] leading-5 text-gray-600 shadow-lg group-hover:block group-focus-within:block">
+                        {opt.tip}
+                      </span>
+                    </span>
                   ))}
                 </div>
               </div>
@@ -2125,7 +2138,7 @@ const batchItemsRef = useRef([])
                 <CheckCircle className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />
                 <div>
                   <p className="text-sm font-semibold text-gray-800">处理完成，可以收藏下次再用</p>
-                  <p className="text-xs leading-5 text-gray-500">下次还可以继续批量放大、裁切比例和格式转换。</p>
+                  <p className="text-xs leading-5 text-gray-500">下次还可以继续批量放大、裁切比例和图片压缩。</p>
                 </div>
               </div>
               <button onClick={handleCopyPageLink}
@@ -2195,9 +2208,9 @@ const batchItemsRef = useRef([])
             <button onClick={() => navigate('/format-converter')}
               className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-                <FileImage className="w-4 h-4 text-indigo-500" /> 本地图片格式转换
+                <FileImage className="w-4 h-4 text-indigo-500" /> 本地图片压缩
               </div>
-              <p className="text-xs leading-6 text-gray-500 mt-1">批量转换 JPG、PNG、WebP、AVIF，支持质量调节和 ZIP 下载。</p>
+              <p className="text-xs leading-6 text-gray-500 mt-1">批量压缩体积、统一尺寸、裁切范围和证件照预设，支持 ZIP 下载。</p>
             </button>
             <button onClick={() => navigate('/product-image')}
               className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
@@ -2239,7 +2252,7 @@ const batchItemsRef = useRef([])
               {'\u5de5\u5177\u652f\u6301\u667a\u80fd\u9510\u5316\u3001\u81ea\u52a8\u8272\u9636\u3001\u81ea\u7136\u9971\u548c\u5ea6\u3001\u6297\u952f\u9f7f\u548c AI \u56fe\u7247\u653e\u5927\u3002\u5982\u679c\u9700\u8981\u4e00\u6b21\u5904\u7406\u591a\u5f20\u56fe\u7247\uff0c\u4e5f\u53ef\u4ee5\u4f7f\u7528\u6279\u91cf\u56fe\u7247\u653e\u5927\u6a21\u5f0f\uff0c\u6309\u540c\u4e00\u7ec4\u53c2\u6570\u987a\u5e8f\u751f\u6210\u9ad8\u6e05\u56fe\u7247\u3002'}
             </p>
             <p className="text-sm leading-7">
-              为了保护隐私，TU Scale 默认在浏览器本地完成图片放大、锐化和格式转换。你选择的图片不会被上传到 TU Scale 服务器，适合处理需要更安心保存的个人照片、头像和普通配图。
+              为了保护隐私，TU Scale 默认在浏览器本地完成图片放大、锐化和图片压缩。你选择的图片不会被上传到 TU Scale 服务器，适合处理需要更安心保存的个人照片、头像和普通配图。
             </p>
           </div>
 

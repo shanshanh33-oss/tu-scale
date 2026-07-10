@@ -171,7 +171,7 @@ export default function ContactPage({ navigate }) {
               <ul className="space-y-2 text-xs leading-6 text-gray-600">
                 <li>你是做自媒体、网站配图，还是临时处理图片？</li>
                 <li>哪个格式、尺寸或平台预设最常用？</li>
-                <li>批量尺寸、裁切比例或格式转换哪里不够顺手？</li>
+                <li>批量压缩、裁切比例或证件照预设哪里不够顺手？</li>
                 <li>你愿意为什么高级功能付费？批量、抠图、换背景，还是更强 AI？</li>
               </ul>
               <div className="border-t border-gray-200 pt-3">
@@ -216,7 +216,7 @@ function InfoCard({ title, text }) {
 function ToolHeader({ active, navigate }) {
   const items = [
     { id: 'upscale', label: '图片放大', path: '/' },
-    { id: 'converter', label: '格式转换', path: '/format-converter' },
+    { id: 'converter', label: '图片压缩', path: '/format-converter' },
     { id: 'product-image', label: '商品图规范化', path: '/product-image' },
     { id: 'contact', label: '反馈联系', path: '/contact' },
   ]

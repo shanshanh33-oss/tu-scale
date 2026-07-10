@@ -78,7 +78,7 @@ const MAX_BATCH_NORMALIZE_FILES = 50
 
 const TOOL_NAV = [
   { id: 'upscale', label: '图片放大', path: '/' },
-  { id: 'converter', label: '格式转换', path: '/format-converter' },
+  { id: 'converter', label: '图片压缩', path: '/format-converter' },
   { id: 'product-image', label: '商品图规范化', path: '/product-image' },
   { id: 'contact', label: '反馈联系', path: '/contact' },
 ]
