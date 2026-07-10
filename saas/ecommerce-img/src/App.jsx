@@ -1891,7 +1891,6 @@ const batchItemsRef = useRef([])
                     <span key={opt.value} className="relative group">
                       <button type="button"
                         onClick={() => setFormat(opt.value)}
-                        title={opt.tip}
                         aria-label={`${opt.label}：${opt.tip}`}
                         className={`px-3 py-1 rounded-md text-xs font-medium border ${
                           format === opt.value
