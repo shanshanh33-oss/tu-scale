@@ -196,7 +196,7 @@ const PAGE_META = {
 
   // --- 公共控制参数 ---
   const [scaleMode, setScaleMode] = useState('scale')
-  const [scale, setScale] = useState(1)
+  const [scale, setScale] = useState(2)
   const [targetMode, setTargetMode] = useState('preset')
   const [targetIdx, setTargetIdx] = useState(2)
   const [customW, setCustomW] = useState(2048)
@@ -1513,6 +1513,11 @@ const batchItemsRef = useRef([])
           ))}
         </div>
 
+        <section className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
+          <p className="text-sm font-semibold text-indigo-800">新用户推荐从 2 倍开始，上传后保持默认设置即可处理</p>
+          <p className="mt-1 text-xs leading-5 text-indigo-600">适合头像、照片、插画和网页配图；图片默认在浏览器本地处理。</p>
+        </section>
+
         <section className="bg-white border border-gray-200 rounded-xl p-3">
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => setToolMode(false)}
@@ -1528,12 +1533,21 @@ const batchItemsRef = useRef([])
 
         {/* ==================== 上传区 ==================== */}
         <section
+          role={!batchMode && !preview ? 'button' : undefined}
+          tabIndex={!batchMode && !preview ? 0 : undefined}
+          aria-label={!batchMode && !preview ? '上传一张图片进行放大' : undefined}
           className={`bg-white rounded-xl border border-dashed p-10 text-center transition-all shadow-sm ${
             batchMode ? 'border-indigo-200 hover:border-indigo-300 hover:bg-indigo-50/30' : 'border-indigo-100 hover:border-indigo-300 hover:bg-indigo-50/20 cursor-pointer'
           } ${
             dragOver ? 'border-indigo-400 bg-indigo-50/60 ring-4 ring-indigo-100' : ''
           }`}
           onClick={() => { if (!batchMode) fileRef.current?.click(); }}
+          onKeyDown={(event) => {
+            if (!batchMode && !preview && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault()
+              fileRef.current?.click()
+            }
+          }}
           onDrop={handleDrop}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
@@ -1670,7 +1684,7 @@ const batchItemsRef = useRef([])
                   <Upload className="w-8 h-8 text-indigo-400" />
                 </div>
                 <p className="text-sm font-medium text-gray-600">点击或拖拽上传图片</p>
-                <p className="text-xs mt-1 text-gray-400">支持 JPG &middot; PNG &middot; WebP</p>
+                <p className="text-xs mt-1 text-gray-400">常用 JPG &middot; PNG &middot; WebP；其他格式取决于浏览器支持</p>
               </div>
             )
           )}
@@ -1804,6 +1818,10 @@ const batchItemsRef = useRef([])
                 <span>1x</span><span>5x</span><span>10x</span><span>15x</span><span>20x</span>
               </div>
 
+              <p className="text-xs leading-5 text-gray-500">
+                {scale === 1 ? '1x 只增强画质，不增加图片尺寸；需要真正放大时建议选择 2x 或更高。' : '推荐从 2x 开始；倍数越高，处理时间和内存占用越大。'}
+              </p>
+
               {!batchMode && expectedOutput && (
                 <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-700">
                   预计导出 <strong>{expectedOutput.w}&times;{expectedOutput.h}px</strong>
@@ -1838,13 +1856,13 @@ const batchItemsRef = useRef([])
               {targetMode === 'preset' ? (
                 <div className="grid grid-cols-2 gap-2">
                   {QUALITY_PRESETS.map((opt, i) => {
-                    const displayDims = previewTargetPreset(opt)
+                    const displayDims = origDims ? previewTargetPreset(opt) : null
                     return (
                       <button key={i} onClick={() => setTargetIdx(i)}
                         className={`py-3 px-4 rounded-lg text-sm border text-left ${targetIdx === i ? 'bg-indigo-50 border-indigo-500' : 'border-gray-200'}`}>
                         <div className={`font-bold ${targetIdx === i ? 'text-indigo-700' : 'text-gray-700'}`}>{opt.label}</div>
                         <div className={`text-xs ${targetIdx === i ? 'text-indigo-500' : 'text-gray-400'}`}>
-                          {displayDims.w}&times;{displayDims.h} · 长边 {opt.edge}px
+                          {displayDims ? `${displayDims.w}×${displayDims.h} · ` : '上传后按原图比例计算 · '}长边 {opt.edge}px
                         </div>
                       </button>
                     )
@@ -2022,7 +2040,7 @@ const batchItemsRef = useRef([])
                     <div className="flex justify-between text-[10px] text-gray-400 px-0.5">
                       <span>{'\u89e3\u6790'}</span><span>{'\u653e\u5927'}</span><span>{'\u9510\u5316'}</span><span>{'\u8f93\u51fa'}</span>
                     </div>
-                    <div className="text-[11px] text-indigo-600 font-medium">{processStage || '准备处理'}</div>
+                    <div className="text-[11px] text-indigo-600 font-medium">{processStage || '准备处理'} · 进度为估算，大图或 AI 模式可能需要较长时间，请不要关闭页面</div>
                   </div>
                 )}
 
@@ -2130,8 +2148,12 @@ const batchItemsRef = useRef([])
             </div>
             <button onClick={handleDownload}
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
-              <Download className="w-4 h-4" /> {'\u4e0b\u8f7d'}
+              <Download className="w-4 h-4" /> 下载 {format === 'jpeg' ? 'JPG' : format.toUpperCase()}
             </button>
+            <p className="text-center text-xs text-gray-500">
+              文件名：{file ? file.name.replace(/\.[^.]+$/, '') : 'image'}_{resultDims.w}x{resultDims.h}.{format === 'jpeg' ? 'jpg' : format}
+              {format === 'png' ? ' · 保留透明背景' : ' · 不保留透明背景'}
+            </p>
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-start gap-2">
                 <CheckCircle className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />
@@ -2140,10 +2162,16 @@ const batchItemsRef = useRef([])
                   <p className="text-xs leading-5 text-gray-500">下次还可以继续批量放大、裁切比例和图片压缩。</p>
                 </div>
               </div>
-              <button onClick={handleCopyPageLink}
-                className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100">
-                <Copy className="w-3.5 h-3.5" /> 复制页面链接
-              </button>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button onClick={() => navigate('/contact')}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700">
+                  <MessageSquare className="w-3.5 h-3.5" /> 批量或定制处理
+                </button>
+                <button onClick={handleCopyPageLink}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100">
+                  <Copy className="w-3.5 h-3.5" /> 复制页面链接
+                </button>
+              </div>
             </div>
             {shareNotice && <p className="text-xs text-indigo-600">{shareNotice}</p>}
           </div>
@@ -2168,7 +2196,8 @@ const batchItemsRef = useRef([])
                   <div className="aspect-square bg-gray-100 relative">
                     <img src={item.result} alt={item.file.name} className="w-full h-full object-cover" />
                     <button onClick={() => downloadSingleResult(item)}
-                      className="absolute bottom-2 right-2 w-8 h-8 bg-white/90 hover:bg-white shadow-sm border border-gray-200 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-indigo-600 hover:text-indigo-700">
+                      aria-label={`下载 ${item.file.name}`}
+                      className="absolute bottom-2 right-2 w-8 h-8 bg-white/90 hover:bg-white shadow-sm border border-gray-200 rounded-lg flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-indigo-600 hover:text-indigo-700">
                       <Download className="w-4 h-4" />
                     </button>
                   </div>
@@ -2187,10 +2216,16 @@ const batchItemsRef = useRef([])
                   <p className="text-xs leading-5 text-gray-500">复制链接后可以发给自己，或保存到常用笔记里。</p>
                 </div>
               </div>
-              <button onClick={handleCopyPageLink}
-                className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100">
-                <Copy className="w-3.5 h-3.5" /> 复制页面链接
-              </button>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button onClick={() => navigate('/contact')}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700">
+                  <MessageSquare className="w-3.5 h-3.5" /> 批量或定制处理
+                </button>
+                <button onClick={handleCopyPageLink}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100">
+                  <Copy className="w-3.5 h-3.5" /> 复制页面链接
+                </button>
+              </div>
             </div>
             {shareNotice && <p className="text-xs text-indigo-600">{shareNotice}</p>}
           </div>
@@ -2290,7 +2325,7 @@ const batchItemsRef = useRef([])
         </section>
       </main>
 
-      <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">TU Scale&middot;{'\u56fe\u7247\u653e\u5927\u5de5\u5177'} &middot; {'\u57fa\u4e8e'} Sharp {'\u5f15\u64ce'}</footer>
+      <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">TU Scale&middot;{'\u56fe\u7247\u653e\u5927\u5de5\u5177'} &middot; 浏览器本地处理</footer>
 
       <RewardButton />
 

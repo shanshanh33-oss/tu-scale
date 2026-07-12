@@ -136,7 +136,9 @@ export default function ContactPage({ navigate }) {
                 <span className="text-sm font-semibold text-gray-800">你的反馈</span>
                 <textarea value={message} onChange={(event) => setMessage(event.target.value)}
                   rows={9}
-                  placeholder="例如：希望增加批量压缩到 2MB 以下、支持 PSD 预览导出、增加抠图换背景、某个浏览器转换失败..."
+                  placeholder={type === 'business'
+                    ? '请写明图片数量、使用平台、目标尺寸/格式、是否需要抠图，以及期望交付时间...'
+                    : '例如：希望增加批量压缩到 2MB 以下、支持 PSD 预览导出、增加抠图换背景、某个浏览器转换失败...'}
                   className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm leading-6 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10 resize-y" />
               </label>
               <label className="block space-y-2">
@@ -222,13 +224,13 @@ function ToolHeader({ active, navigate }) {
   ]
 
   return (
-    <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 sticky top-0 z-10 shadow-sm">
-      <div className="max-w-6xl mx-auto flex items-center gap-4">
+    <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-4 sm:px-6 py-3 sticky top-0 z-10 shadow-sm">
+      <div className="max-w-6xl mx-auto flex flex-wrap items-center gap-3 sm:gap-4">
         <img src="/logo.png" alt="TU Scale" className="h-16 sm:h-18 w-auto shrink-0" />
         <div className="flex flex-col min-w-0 mr-auto justify-center">
           <h1 className="text-lg sm:text-xl font-bold tracking-tight truncate leading-tight" style={{ color: '#8040f0' }}>TU Scale</h1>
         </div>
-        <nav className="flex items-center gap-1 overflow-x-auto">
+        <nav className="order-2 flex w-full items-center gap-1 overflow-x-auto sm:order-none sm:w-auto">
           {items.map(item => (
             <button key={item.id} onClick={() => navigate(item.path)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${active === item.id ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'text-gray-500 hover:bg-gray-50 border border-transparent'}`}>

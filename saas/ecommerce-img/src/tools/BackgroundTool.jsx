@@ -2028,6 +2028,10 @@ export default function BackgroundTool({ navigate }) {
               <p className="font-semibold">功能测试说明</p>
               <p>AI 抠图目前使用付费 API 进行效果测试。为避免测试期产生不可控成本，每个 IP 每天可免费试用 1 张。</p>
               <p className="text-xs text-amber-700">“先优化抠图临时图”会先把原图缩放到略大于最终平台尺寸，减少 API 消耗并保留边缘清晰度；确认临时图没问题后再点“生成规范图”。</p>
+              <button type="button" onClick={() => document.getElementById('removebg-survey')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className="mt-3 inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100">
+                有批量需求？申请内测
+              </button>
             </div>
 
             <div className="mb-5 grid min-w-0 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -2132,7 +2136,7 @@ export default function BackgroundTool({ navigate }) {
               </div>
             </div>
 
-            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div id="removebg-survey" className="mt-5 scroll-mt-28 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="mb-3">
                 <p className="text-sm font-semibold text-slate-800">AI 抠图付费与批量需求调查</p>
                 <p className="mt-1 text-xs text-slate-500">以下价格是测试期备选方案，用来判断是否值得正式上线；不会在这里直接扣费。</p>
