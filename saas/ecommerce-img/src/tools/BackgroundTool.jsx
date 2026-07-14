@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Upload, Download, Loader2, Sparkles, CheckCircle, AlertCircle, Brush, Eraser, RotateCcw } from 'lucide-react'
 import JSZip from 'jszip'
 import RewardButton from './RewardButton'
+
+const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, revokeObjectUrl, trackEvent } from './shared'
 
 const mb = (value) => value * 1024 * 1024
@@ -672,6 +674,9 @@ export default function BackgroundTool({ navigate }) {
   const normalizeCropStageRef = useRef(null)
   const subjectStageRef = useRef(null)
   const editStateRef = useRef({ drawing: false, snapshot: null })
+  const singleExportIdRef = useRef('')
+  const batchExportRef = useRef({ signature: '', id: '' })
+  const batchDownloadLockRef = useRef(false)
   const sourceCanvasRef = useRef(null)
   const [file, setFile] = useState(null)
   const [batchFiles, setBatchFiles] = useState([])
@@ -1374,6 +1379,7 @@ export default function BackgroundTool({ navigate }) {
         }
       })
       setCutoutStatus(`${method === 'removebg' ? 'AI 抠图完成' : '已生成白底规范图'}，输出 ${preset.w} x ${preset.h}，${format.label}，${formatBytes(blob.size)}${preset.maxBytes ? ` / 上限 ${formatBytes(preset.maxBytes)}` : ''}。`)
+      singleExportIdRef.current = createExportId()
       trackEvent('process_success', { tool: 'product_image', method, preset: preset.id })
     } catch (err) {
       const message = err?.message || '处理失败'
@@ -1397,11 +1403,22 @@ export default function BackgroundTool({ navigate }) {
     setResultBlob(blob)
     setResultSize(blob.size)
     downloadBlob(blob, `${getBaseName(file.name)}_${preset.platform}_${preset.w}x${preset.h}.${format.ext}`)
-    trackEvent('download', { tool: 'product_image', count: 1, format: format.id, preset: preset.id })
+    const exportId = singleExportIdRef.current || createExportId()
+    singleExportIdRef.current = exportId
+    trackEvent('download_success', { tool: 'product_image', mode: 'single', format: format.id, preset: preset.id })
+    trackEvent('exported_image', {
+      tool: 'product_image',
+      mode: 'single',
+      count: 1,
+      format: format.id,
+      preset: preset.id,
+      eventId: `e_${exportId}-image`,
+    })
   }, [file, outputFormat, preset, resultMode])
 
   const handleBatchNormalize = useCallback(async () => {
-    if (!batchFiles.length) return
+    if (!batchFiles.length || batchDownloadLockRef.current) return
+    batchDownloadLockRef.current = true
     setProcessing(true)
     setNormalizeError('')
     try {
@@ -1432,10 +1449,28 @@ export default function BackgroundTool({ navigate }) {
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       downloadBlob(zipBlob, `${folderName}.zip`)
       setNormalizeStatus(`已批量生成并打包 ${batchFiles.length} 张：${normalizePreset.platform} ${normalizePreset.label}，${normalizePreset.w} x ${normalizePreset.h}${normalizePreset.maxBytes ? `，单张上限 ${formatBytes(normalizePreset.maxBytes)}` : ''}。`)
-      trackEvent('batch_normalize', { tool: 'product_image', count: batchFiles.length, preset: normalizePreset.id })
+      const signature = [
+        normalizePreset.id,
+        outputFormat,
+        normalizeFillRatio,
+        globalBgColor,
+        ...batchFiles.map(item => `${item.name}:${item.size}:${item.lastModified}`),
+      ].join('|')
+      if (batchExportRef.current.signature !== signature) {
+        batchExportRef.current = { signature, id: createExportId() }
+      }
+      trackEvent('download_success', { tool: 'product_image', mode: 'batch_zip', preset: normalizePreset.id })
+      trackEvent('exported_image', {
+        tool: 'product_image',
+        mode: 'batch_zip',
+        count: batchFiles.length,
+        preset: normalizePreset.id,
+        eventId: `e_${batchExportRef.current.id}-images`,
+      })
     } catch (err) {
       setNormalizeError(err?.message || '批量规范失败')
     } finally {
+      batchDownloadLockRef.current = false
       setProcessing(false)
     }
   }, [batchAnalysis, batchFiles, cropOverrides, globalBgColor, normalizeFillRatio, normalizePreset, outputFormat])

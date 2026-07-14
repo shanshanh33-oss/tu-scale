@@ -47,6 +47,7 @@ const WARN_OUTPUT_PIXELS = 45_000_000
 const MAX_OUTPUT_PIXELS = 80_000_000
 const MAX_AI_INPUT_EDGE = 2048
 const MAX_AI_INPUT_PIXELS = 4_200_000
+const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
 const revokeObjectUrl = (url) => {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -286,6 +287,7 @@ const PAGE_META = {
   const [batchMode, setBatchMode] = useState(false)
   const [batchItems, setBatchItems] = useState([])
   const [batchProcessing, setBatchProcessing] = useState(false)
+  const [zipDownloading, setZipDownloading] = useState(false)
   const [batchToast, setBatchToast] = useState('')
   const [fileNameTemplate, setFileNameTemplate] = useState('{name}_{w}x{h}')
   const [dragOverIdx, setDragOverIdx] = useState(null)
@@ -305,6 +307,9 @@ const pendingCountRef = useRef(0)
 const doneCountRef = useRef(0)
 const keyRefs = useRef({})
 const batchItemsRef = useRef([])
+const singleExportIdRef = useRef('')
+const batchExportRef = useRef({ signature: '', id: '' })
+const zipDownloadLockRef = useRef(false)
 
  const leftScrollRef = useRef(null)
   const rightScrollRef = useRef(null)
@@ -406,6 +411,7 @@ const batchItemsRef = useRef([])
 
   // --- 单图模式 effect ---
   useEffect(() => {
+    singleExportIdRef.current = ''
     setResult(null)
     setResultDims(null)
     setResultSize(null)
@@ -1278,6 +1284,7 @@ const batchItemsRef = useRef([])
         ? (res.size / 1024).toFixed(1) + ' KB'
         : (res.size / (1024 * 1024)).toFixed(1) + ' MB'
         setResultSize(sizeKB)
+        singleExportIdRef.current = createExportId()
         setProgress(100)
         setProcessStage('完成')
         trackEvent('process_success', {
@@ -1360,6 +1367,7 @@ const batchItemsRef = useRef([])
             resultBlob: res.blob,
             resultDims: { w: res.width, h: res.height },
             resultSize: sizeKB,
+            exportId: createExportId(),
             stage: '完成'
           } : it))
           trackEvent('batch_item_success', {
@@ -1383,12 +1391,16 @@ const batchItemsRef = useRef([])
   // --- 单图下载 ---
   const handleDownload = () => {
     if (!result) return
-    trackEvent('download', { mode: 'single', format })
     const a = document.createElement('a')
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
     const name = file ? file.name.replace(/\.[^.]+$/, '') : 'image'
     a.download = `${name}_${resultDims ? resultDims.w + 'x' + resultDims.h : 'result'}.${ext}`
-    a.href = result; a.click()
+    a.href = result
+    a.click()
+    const exportId = singleExportIdRef.current || createExportId()
+    singleExportIdRef.current = exportId
+    trackEvent('download_success', { mode: 'single', format })
+    trackEvent('exported_image', { mode: 'single', format, count: 1, eventId: `e_${exportId}-image` })
   }
 
   // --- 渲染文件名模板 ---
@@ -1408,20 +1420,24 @@ const batchItemsRef = useRef([])
   // --- 单图下载（批量用）---
   const downloadSingleResult = (item, index) => {
     if (!item.result) return
-    trackEvent('download', { mode: 'batch_single', format })
     const a = document.createElement('a')
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
     a.download = renderFileName(item, index || 0) + '.' + ext
     a.href = item.result
     a.click()
+    const exportId = item.exportId || `batch-${item.id}`
+    trackEvent('download_success', { mode: 'batch_single', format })
+    trackEvent('exported_image', { mode: 'batch_single', format, count: 1, eventId: `e_${exportId}-image` })
   }
 
   // --- 批量下载全部为 ZIP ---
   const downloadAllAsZip = useCallback(async () => {
+    if (zipDownloadLockRef.current) return
+    zipDownloadLockRef.current = true
+    setZipDownloading(true)
     try {
     const doneItems = batchItems.filter(it => it.status === 'done' && it.result)
     if (doneItems.length === 0) { alert('没有可下载的图片'); return }
-    trackEvent('download_zip', { count: doneItems.length, format })
 
     const zip = new JSZip()
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
@@ -1448,7 +1464,22 @@ const batchItemsRef = useRef([])
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(a.href)
+    const signature = doneItems.map(item => item.exportId || item.id).join('|')
+    if (batchExportRef.current.signature !== signature) {
+      batchExportRef.current = { signature, id: createExportId() }
+    }
+    trackEvent('download_success', { mode: 'batch_zip', format })
+    trackEvent('exported_image', {
+      mode: 'batch_zip',
+      format,
+      count: doneItems.length,
+      eventId: `e_${batchExportRef.current.id}-images`,
+    })
     } catch(e) { alert('下载失败: ' + e.message) }
+    finally {
+      zipDownloadLockRef.current = false
+      setZipDownloading(false)
+    }
   }, [batchItems, format])
 
   // --- 计算活跃状态 ---
@@ -2185,9 +2216,10 @@ const batchItemsRef = useRef([])
                 <CheckCircle className="w-4 h-4 text-green-500" />
                 {'\u5904\u7406\u5b8c\u6210'} ({doneCount}/{batchItems.length})
               </h2>
-              <button onClick={downloadAllAsZip}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition-colors text-xs font-medium">
-                <FileDown className="w-3.5 h-3.5" /> {'\u5168\u90e8\u4e0b\u8f7d'} (ZIP)
+              <button onClick={downloadAllAsZip} disabled={zipDownloading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 disabled:cursor-wait disabled:opacity-60 transition-colors text-xs font-medium">
+                {zipDownloading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+                {zipDownloading ? '正在打包 ZIP' : '全部下载 (ZIP)'}
               </button>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">

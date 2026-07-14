@@ -11,6 +11,8 @@ const EVENTS = [
   'batch_item_error',
   'download',
   'download_zip',
+  'download_success',
+  'exported_image',
   'survey_submit',
 ]
 
@@ -39,7 +41,30 @@ const createToolBreakdown = () => Object.fromEntries(TOOLS.map((tool) => [tool, 
 
 const normalizeEvent = (event) => EVENTS.includes(event) ? event : ''
 
-const normalizeTool = (tool) => TOOLS.includes(tool) ? tool : 'unknown'
+const normalizeTool = (tool) => {
+  if (tool === 'compressor') return 'converter'
+  return TOOLS.includes(tool) ? tool : 'unknown'
+}
+
+const getStatsToken = (request) => {
+  const authorization = request.headers.get('authorization') || ''
+  if (authorization.startsWith('Bearer ')) return authorization.slice(7).trim()
+  return new URL(request.url).searchParams.get('token') || ''
+}
+
+const isStatsAuthorized = (context) => {
+  const expected = String(context.env.STATS_ADMIN_TOKEN || '')
+  return !expected || getStatsToken(context.request) === expected
+}
+
+const hashVisitorIds = async (day, ids) => {
+  const uniqueIds = [...new Set(ids.filter(Boolean))]
+  return Promise.all(uniqueIds.map(async (id) => {
+    const bytes = new TextEncoder().encode(`${day}:${id}`)
+    const digest = await crypto.subtle.digest('SHA-256', bytes)
+    return [...new Uint8Array(digest)].slice(0, 12).map(byte => byte.toString(16).padStart(2, '0')).join('')
+  }))
+}
 
 const addEvent = (summary, item) => {
   const event = normalizeEvent(String(item?.event || ''))
@@ -70,6 +95,8 @@ const getMetadataEvents = (metadata) => {
 }
 
 export async function onRequestGet(context) {
+  if (!isStatsAuthorized(context)) return json({ ok: false, error: 'UNAUTHORIZED' }, 401)
+
   const kv = context.env.TUSCALE_ANALYTICS
   if (!kv) return json({ ok: false, configured: false }, 202)
 
@@ -112,12 +139,26 @@ export async function onRequestGet(context) {
     }
   }
 
+  const visitorKeys = await hashVisitorIds(day, summary.visitors)
+  const toolVisitorKeys = Object.fromEntries(await Promise.all(TOOLS.map(async (tool) => [
+    tool,
+    await hashVisitorIds(day, summary.toolVisitors[tool]),
+  ])))
+
   return json({
     ok: true,
     configured: true,
     day,
     cursor: listed.list_complete ? '' : listed.cursor,
     complete: Boolean(listed.list_complete),
-    summary,
+    summary: {
+      totals: summary.totals,
+      tools: summary.tools,
+      visitorKeys,
+      toolVisitorKeys,
+      eventLogCount: summary.eventLogCount,
+      legacyReadCount: summary.legacyReadCount,
+      metadataReadCount: summary.metadataReadCount,
+    },
   })
 }

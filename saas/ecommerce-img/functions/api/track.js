@@ -11,12 +11,15 @@ const ALLOWED_EVENTS = new Set([
   'batch_item_error',
   'download',
   'download_zip',
+  'download_success',
+  'exported_image',
   'survey_submit',
 ])
 
 const ID_PATTERN = /^[a-z]_[a-zA-Z0-9-]{8,80}$/
 const EVENT_LOG_TTL = 60 * 60 * 24 * 60
 const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image'])
+const IDEMPOTENT_EVENTS = new Set(['download_success', 'exported_image'])
 const MAX_BATCH_EVENTS = 5
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -29,7 +32,10 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 
 const getChinaDate = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-const normalizeTool = (tool) => ALLOWED_TOOLS.has(tool) ? tool : 'unknown'
+const normalizeTool = (tool) => {
+  if (tool === 'compressor') return 'converter'
+  return ALLOWED_TOOLS.has(tool) ? tool : 'unknown'
+}
 
 const normalizeEventPayload = (item) => {
   const event = String(item?.event || '').trim()
@@ -40,15 +46,40 @@ const normalizeEventPayload = (item) => {
   const amount = Math.max(1, Math.min(Number.isFinite(rawCount) ? Math.round(rawCount) : 1, 100))
   const visitorId = String(data.visitorId || '').trim()
   const sessionId = String(data.sessionId || '').trim()
+  const eventId = String(item?.eventId || data.eventId || '').trim()
   const tool = normalizeTool(String(data.tool || '').trim())
 
   return {
     event,
+    eventId: ID_PATTERN.test(eventId) ? eventId : '',
     amount,
     tool,
     visitorId: ID_PATTERN.test(visitorId) ? visitorId : '',
     sessionId: ID_PATTERN.test(sessionId) ? sessionId : '',
   }
+}
+
+const reserveIdempotentEvents = async (kv, day, events) => {
+  const accepted = []
+  let deduplicated = 0
+
+  for (const event of events) {
+    if (!event.eventId || !IDEMPOTENT_EVENTS.has(event.event)) {
+      accepted.push(event)
+      continue
+    }
+
+    const dedupeKey = `event-id:${day}:${event.eventId}`
+    if (await kv.get(dedupeKey)) {
+      deduplicated += 1
+      continue
+    }
+
+    await kv.put(dedupeKey, '1', { expirationTtl: EVENT_LOG_TTL })
+    accepted.push(event)
+  }
+
+  return { accepted, deduplicated }
 }
 
 const writeEventLog = async (kv, { day, events }) => {
@@ -79,16 +110,19 @@ export async function onRequestPost(context) {
 
   const day = getChinaDate()
   const rawEvents = Array.isArray(body?.events) ? body.events : [body]
-  const events = rawEvents
+  const normalizedEvents = rawEvents
     .slice(0, MAX_BATCH_EVENTS)
     .map(normalizeEventPayload)
     .filter(Boolean)
 
-  if (!events.length) return json({ ok: false, error: 'INVALID_EVENT' }, 400)
+  if (!normalizedEvents.length) return json({ ok: false, error: 'INVALID_EVENT' }, 400)
+
+  const { accepted: events, deduplicated } = await reserveIdempotentEvents(kv, day, normalizedEvents)
+  if (!events.length) return json({ ok: true, count: 0, deduplicated })
 
   await writeEventLog(kv, { day, events })
 
-  return json({ ok: true, count: events.length })
+  return json({ ok: true, count: events.length, deduplicated })
 }
 
 export function onRequestOptions() {

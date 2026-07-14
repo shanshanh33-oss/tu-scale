@@ -11,6 +11,8 @@ const EVENTS = [
   'batch_item_error',
   'download',
   'download_zip',
+  'download_success',
+  'exported_image',
   'survey_submit',
 ]
 
@@ -23,7 +25,7 @@ const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
 
 const TOOL_LABELS = {
   upscale: '图片放大',
-  converter: '格式转换',
+  converter: '图片压缩',
   product_image: '商品图规范化',
   unknown: '未细分旧数据',
 }
@@ -40,8 +42,10 @@ const LABELS = {
   batch_start: '批量待处理图片数',
   batch_item_success: '批量成功图片',
   batch_item_error: '批量失败图片',
-  download: '单张下载图片数',
-  download_zip: 'ZIP 导出图片数',
+  download: '旧版单张下载事件',
+  download_zip: '旧版 ZIP 图片累计（可能重复）',
+  download_success: '成功下载操作',
+  exported_image: '首次成功导出图片',
   survey_submit: '功能意愿反馈',
 }
 
@@ -60,6 +64,17 @@ const html = (body, status = 200) => new Response(body, {
     'Cache-Control': 'no-store',
   },
 })
+
+const getStatsToken = (request) => {
+  const authorization = request.headers.get('authorization') || ''
+  if (authorization.startsWith('Bearer ')) return authorization.slice(7).trim()
+  return new URL(request.url).searchParams.get('token') || ''
+}
+
+const isStatsAuthorized = (context) => {
+  const expected = String(context.env.STATS_ADMIN_TOKEN || '')
+  return !expected || getStatsToken(context.request) === expected
+}
 
 const getChinaDate = (offset = 0) => {
   const time = Date.now() + 8 * 60 * 60 * 1000 - offset * 24 * 60 * 60 * 1000
@@ -188,26 +203,26 @@ const getDaySummary = (kv, day) => summarizeEventLogsForDay(kv, day)
 
 const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource = {}, configured = true, message = '' }) => {
   const today = getToday(days)
-  const exportedToday = sumEvents(today, ['download', 'download_zip'])
-  const exportedTotal = sumEvents(totals, ['download', 'download_zip'])
+  const exportedToday = today.exported_image || 0
+  const exportedTotal = totals.exported_image || 0
   const processTotal = sumEvents(totals, ['process_success', 'batch_item_success'])
   const processErrors = sumEvents(totals, ['process_error', 'batch_item_error'])
   const uploadMax = getMax(days, ['image_uploaded'])
-  const exportMax = getMax(days, ['download', 'download_zip'])
+  const exportMax = getMax(days, ['exported_image'])
   const visitMax = getMax(days, ['page_view'])
   const recentDays = [...days].reverse()
   const metricCards = [
     { label: '今日独立访客', value: today.unique_visitor, hint: `访问会话 ${formatNumber(today.session_start)}` },
     { label: '今天上传', value: today.image_uploaded, hint: `处理成功 ${formatNumber(sumEvents(today, ['process_success', 'batch_item_success']))}` },
-    { label: '今天导出图片', value: exportedToday, hint: `ZIP 内图片 ${formatNumber(today.download_zip)}` },
+    { label: '今天首次导出图片', value: exportedToday, hint: `成功下载操作 ${formatNumber(today.download_success)}` },
     { label: '累计独立访客', value: totals.unique_visitor, hint: `累计会话 ${formatNumber(totals.session_start)}` },
     { label: '累计上传', value: totals.image_uploaded, hint: `成功处理 ${formatNumber(processTotal)}` },
-    { label: '累计导出图片', value: exportedTotal, hint: `处理错误率 ${percent(processErrors, processTotal + processErrors)}` },
+    { label: '累计首次导出图片', value: exportedTotal, hint: `处理错误率 ${percent(processErrors, processTotal + processErrors)}` },
   ].map(renderMetricCard).join('')
 
   const tableRows = recentDays.map((day) => {
     const processed = sumEvents(day, ['process_success', 'batch_item_success'])
-    const exportedImages = sumEvents(day, ['download', 'download_zip'])
+    const exportedImages = day.exported_image || 0
     return `
       <tr>
         <td>${day.day}</td>
@@ -235,8 +250,8 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
     const todayValue = toolBreakdown?.today?.[tool] || createEmptyMetrics()
     const totalProcessed = sumEvents(total, ['process_success', 'batch_item_success'])
     const todayProcessed = sumEvents(todayValue, ['process_success', 'batch_item_success'])
-    const totalExported = sumEvents(total, ['download', 'download_zip'])
-    const todayExported = sumEvents(todayValue, ['download', 'download_zip'])
+    const totalExported = total.exported_image || 0
+    const todayExported = todayValue.exported_image || 0
 
     return `
       <tr>
@@ -435,7 +450,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
     <section>
       <div class="section-head">
         <h2>功能使用情况</h2>
-        <p>按图片放大、格式转换和商品图规范化拆分。</p>
+        <p>按图片放大、图片压缩和商品图规范化拆分。</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -469,7 +484,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
               <th>访问会话</th>
               <th>上传图片</th>
               <th>处理成功</th>
-              <th>导出图片</th>
+              <th>首次导出图片</th>
             </tr>
           </thead>
           <tbody>${tableRows}</tbody>
@@ -537,6 +552,7 @@ const renderStatsShell = () => `<!doctype html>
     .bar { display:inline-block; width:96px; height:8px; margin-left:10px; overflow:hidden; border-radius:99px; background:var(--soft); vertical-align:middle; }
     .bar i { display:block; height:100%; border-radius:inherit; background:var(--accent); }
     .note { margin-top:14px; font-size:13px; color:var(--muted); }
+    .anomaly { display:block; margin-top:4px; color:#b45309; font-size:11px; font-weight:600; white-space:normal; }
     @media (max-width:760px) { main { width:min(100% - 24px,1120px); padding-top:22px; } header, .section-head { display:block; } .status { margin-top:14px; } .metrics { grid-template-columns:1fr; } th, td { padding:11px 14px; } }
   </style>
 </head>
@@ -551,12 +567,12 @@ const renderStatsShell = () => `<!doctype html>
     </header>
     <div id="metrics" class="metrics"></div>
     <section>
-      <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、格式转换和商品图规范化拆分。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
+      <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、图片压缩和商品图规范化拆分。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>首次导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
     <section>
       <div class="section-head"><h2>最近 30 天</h2><p>独立访客是全站去重来访；浏览事件仅作参考。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>日期</th><th>浏览事件（参考）</th><th>独立访客</th><th>访问会话</th><th>上传图片</th><th>处理成功</th><th>导出图片</th></tr></thead><tbody id="dayRows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>日期</th><th>浏览事件（参考）</th><th>独立访客</th><th>访问会话</th><th>上传图片</th><th>处理成功</th><th>成功下载操作</th><th>首次导出图片</th><th>旧口径导出</th></tr></thead><tbody id="dayRows"></tbody></table></div>
     </section>
     <section>
       <div class="section-head"><h2>事件明细</h2><p>给调试和判断功能使用情况时看。</p></div>
@@ -570,6 +586,8 @@ const renderStatsShell = () => `<!doctype html>
     const TOOLS = ${JSON.stringify(TOOLS)};
     const LABELS = ${JSON.stringify(LABELS)};
     const TOOL_LABELS = ${JSON.stringify(TOOL_LABELS)};
+    const STATS_TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+    const ANOMALOUS_DAYS = { '2026-07-12': '旧版 ZIP 重复触发：426 不是不同图片的成功导出数' };
     const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
@@ -588,15 +606,16 @@ const renderStatsShell = () => `<!doctype html>
       day.eventLogCount += chunk.eventLogCount || 0;
       day.legacyReadCount += chunk.legacyReadCount || 0;
       day.metadataReadCount += chunk.metadataReadCount || 0;
-      day.visitors.push(...(chunk.visitors || []));
-      TOOLS.forEach((tool) => day.toolVisitors[tool].push(...(chunk.toolVisitors?.[tool] || [])));
+      day.visitors.push(...(chunk.visitorKeys || chunk.visitors || []));
+      TOOLS.forEach((tool) => day.toolVisitors[tool].push(...(chunk.toolVisitorKeys?.[tool] || chunk.toolVisitors?.[tool] || [])));
     };
 
     const loadDay = async (name, onProgress) => {
       const day = { day: name, ...emptyMetrics(), tools: emptyTools(), visitors: [], toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])), eventLogCount: 0, legacyReadCount: 0, metadataReadCount: 0 };
       let cursor = '';
       do {
-        const res = await fetch('/api/stats-data?day=' + encodeURIComponent(name) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { cache: 'no-store' });
+        const headers = STATS_TOKEN ? { Authorization: 'Bearer ' + STATS_TOKEN } : {};
+        const res = await fetch('/api/stats-data?day=' + encodeURIComponent(name) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { cache: 'no-store', headers });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'STATS_DATA_FAILED');
         mergeChunk(day, data.summary);
@@ -615,38 +634,40 @@ const renderStatsShell = () => `<!doctype html>
       days.forEach((day) => { addMetrics(totals, day); addTools(totalTools, day.tools); });
       const processedTotal = sum(totals, ['process_success', 'batch_item_success']);
       const errors = sum(totals, ['process_error', 'batch_item_error']);
-      const exportedToday = sum(today, ['download', 'download_zip']);
-      const exportedTotal = sum(totals, ['download', 'download_zip']);
+      const exportedToday = today.exported_image || 0;
+      const exportedTotal = totals.exported_image || 0;
       document.getElementById('metrics').innerHTML = [
         card('今日独立访客', today.unique_visitor, '访问会话 ' + fmt(today.session_start)),
         card('今天上传', today.image_uploaded, '处理成功 ' + fmt(sum(today, ['process_success', 'batch_item_success']))),
-        card('今天导出图片', exportedToday, 'ZIP 内图片 ' + fmt(today.download_zip)),
+        card('今天首次导出图片', exportedToday, '成功下载操作 ' + fmt(today.download_success)),
         card('累计独立访客', totals.unique_visitor, '累计会话 ' + fmt(totals.session_start)),
         card('累计上传', totals.image_uploaded, '成功处理 ' + fmt(processedTotal)),
-        card('累计导出图片', exportedTotal, '处理错误率 ' + percent(errors, processedTotal + errors)),
+        card('累计首次导出图片', exportedTotal, '成功下载操作 ' + fmt(totals.download_success)),
       ].join('');
 
       document.getElementById('toolRows').innerHTML = ['upscale', 'converter', 'product_image'].map((tool) => {
         const total = totalTools[tool] || emptyMetrics();
         const todayValue = today.tools?.[tool] || emptyMetrics();
-        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(sum(total, ['download', 'download_zip'])) + ' / ' + fmt(sum(todayValue, ['download', 'download_zip'])) + '</td></tr>';
+        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(todayValue.exported_image) + '</td></tr>';
       }).join('');
 
       const recent = [...days].reverse();
       const visitMax = Math.max(1, ...days.map((day) => day.page_view || 0));
       const uploadMax = Math.max(1, ...days.map((day) => day.image_uploaded || 0));
-      const exportMax = Math.max(1, ...days.map((day) => sum(day, ['download', 'download_zip'])));
+      const exportMax = Math.max(1, ...days.map((day) => day.exported_image || 0));
       document.getElementById('dayRows').innerHTML = recent.map((day) => {
         const processed = sum(day, ['process_success', 'batch_item_success']);
-        const exported = sum(day, ['download', 'download_zip']);
-        return '<tr><td>' + day.day + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td></tr>';
+        const exported = day.exported_image || 0;
+        const legacyExported = sum(day, ['download', 'download_zip']);
+        const anomaly = ANOMALOUS_DAYS[day.day] ? '<span class="anomaly">' + ANOMALOUS_DAYS[day.day] + '</span>' : '';
+        return '<tr><td>' + day.day + anomaly + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(day.download_success) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td><td><b>' + fmt(legacyExported) + '</b></td></tr>';
       }).join('');
 
       document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(today[event]) + '</td></tr>').join('');
       const eventLogs = days.reduce((total, day) => total + day.eventLogCount, 0);
       const legacyReads = days.reduce((total, day) => total + day.legacyReadCount, 0);
       const metadataReads = days.reduce((total, day) => total + day.metadataReadCount, 0);
-      document.getElementById('note').textContent = '口径说明：准确来访量以“独立访客”为准；访问会话为 session_start 事件数。已读取原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。只统计产品事件，不收集图片内容、文件名、邮箱、用户身份或 IP。';
+      document.getElementById('note').textContent = '口径说明：成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已读取原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
     };
 
     (async () => {
@@ -679,6 +700,13 @@ export async function onRequestGet(context) {
     || accept.includes('text/html')
   const wantsJson = requestUrl.searchParams.get('format') === 'json'
   const wantsDebug = requestUrl.searchParams.get('debug') === '1'
+
+  if (!isStatsAuthorized(context)) {
+    const body = { ok: false, error: 'UNAUTHORIZED', message: '需要统计管理口令' }
+    return wantsHtml && !wantsJson
+      ? html('<!doctype html><meta charset="utf-8"><title>需要管理口令</title><p>需要有效的统计管理口令。</p>', 401)
+      : json(body, 401)
+  }
 
   if (wantsHtml && !wantsJson) return html(renderStatsShell())
   if (wantsJson || !wantsHtml) {

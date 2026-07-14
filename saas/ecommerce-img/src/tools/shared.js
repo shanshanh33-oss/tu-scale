@@ -127,6 +127,7 @@ export const trackEvent = (event, data = {}) => {
   ensureAnalyticsFlushListeners()
   analyticsQueue.push({
     event,
+    eventId: data.eventId || createAnalyticsId('e'),
     data: {
       tool: inferTool(),
       ...data,

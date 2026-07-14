@@ -42,6 +42,7 @@ const COMPRESS_FAQ = [
 ]
 
 let compressorId = 0
+const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
@@ -91,6 +92,8 @@ export default function FormatConverter({ navigate }) {
   const folderRef = useRef(null)
   const editorRef = useRef(null)
   const dragRef = useRef(null)
+  const zipExportRef = useRef({ signature: '', id: '' })
+  const zipDownloadLockRef = useRef(false)
   const [items, setItems] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [format, setFormat] = useState('jpeg')
@@ -104,6 +107,7 @@ export default function FormatConverter({ navigate }) {
   const [faceGuide, setFaceGuide] = useState(false)
   const [cropPreview, setCropPreview] = useState('')
   const [processing, setProcessing] = useState(false)
+  const [zipDownloading, setZipDownloading] = useState(false)
   const [message, setMessage] = useState('')
   const [shareNotice, setShareNotice] = useState('')
 
@@ -176,7 +180,7 @@ export default function FormatConverter({ navigate }) {
   const addFiles = useCallback(async (fileList) => {
     const imageFiles = Array.from(fileList || []).filter(file => file.type.startsWith('image/') || /\.(jpg|jpeg|jfif|png|webp|gif|bmp|svg|avif|ico|heic|heif|tif|tiff)$/i.test(file.name))
     if (imageFiles.length === 0) return
-    trackEvent('image_uploaded', { tool: 'compressor', mode: 'compressor', count: imageFiles.length })
+    trackEvent('image_uploaded', { tool: 'converter', mode: 'compressor', count: imageFiles.length })
 
     const incoming = imageFiles.map(file => ({
       id: ++compressorId,
@@ -399,7 +403,7 @@ export default function FormatConverter({ navigate }) {
 
     setProcessing(true)
     setMessage('')
-    trackEvent('process_start', { tool: 'compressor', mode: 'compressor', count: ready.length, format, preset: sizePreset, targetKb })
+    trackEvent('process_start', { tool: 'converter', mode: 'compressor', count: ready.length, format, preset: sizePreset, targetKb })
 
     for (const item of ready) {
       setItems(prev => prev.map(current => current.id === item.id ? { ...current, status: 'processing', error: '' } : current))
@@ -408,15 +412,15 @@ export default function FormatConverter({ navigate }) {
         setItems(prev => prev.map(current => {
           if (current.id !== item.id) return current
           revokeObjectUrl(current.url)
-          return { ...current, status: 'done', ...result }
+          return { ...current, status: 'done', ...result, exportId: createExportId() }
         }))
-        trackEvent('process_success', { tool: 'compressor', mode: 'compressor', format })
+        trackEvent('process_success', { tool: 'converter', mode: 'compressor', format })
       } catch {
         setItems(prev => prev.map(current => current.id === item.id
           ? { ...current, status: 'error', error: '处理失败，请换一种输出格式或调小尺寸' }
           : current
         ))
-        trackEvent('process_error', { tool: 'compressor', mode: 'compressor', format })
+        trackEvent('process_error', { tool: 'converter', mode: 'compressor', format })
       }
     }
 
@@ -425,19 +429,46 @@ export default function FormatConverter({ navigate }) {
 
   const downloadOne = (item) => {
     if (!item.blob) return
-    trackEvent('download', { tool: 'compressor', mode: 'compressor_single', format })
     downloadBlob(item.blob, `${getBaseName(item.file.name)}_compressed.${output.ext}`)
+    trackEvent('download_success', { tool: 'converter', mode: 'compressor_single', format })
+    trackEvent('exported_image', {
+      tool: 'converter',
+      mode: 'compressor_single',
+      format,
+      count: 1,
+      eventId: `e_${item.exportId || `compressor-${item.id}`}-image`,
+    })
   }
 
   const downloadZip = async () => {
-    if (doneItems.length === 0) return
-    trackEvent('download_zip', { tool: 'compressor', count: doneItems.length, format })
-    const zip = new JSZip()
-    doneItems.forEach(item => {
-      zip.file(`${getBaseName(item.file.name)}_compressed.${output.ext}`, item.blob)
-    })
-    const zipBlob = await zip.generateAsync({ type: 'blob' })
-    downloadBlob(zipBlob, `tuscale_compressed_${doneItems.length}.zip`)
+    if (doneItems.length === 0 || zipDownloadLockRef.current) return
+    zipDownloadLockRef.current = true
+    setZipDownloading(true)
+    try {
+      const zip = new JSZip()
+      doneItems.forEach(item => {
+        zip.file(`${getBaseName(item.file.name)}_compressed.${output.ext}`, item.blob)
+      })
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      downloadBlob(zipBlob, `tuscale_compressed_${doneItems.length}.zip`)
+      const signature = doneItems.map(item => item.exportId || item.id).join('|')
+      if (zipExportRef.current.signature !== signature) {
+        zipExportRef.current = { signature, id: createExportId() }
+      }
+      trackEvent('download_success', { tool: 'converter', mode: 'compressor_zip', format })
+      trackEvent('exported_image', {
+        tool: 'converter',
+        mode: 'compressor_zip',
+        format,
+        count: doneItems.length,
+        eventId: `e_${zipExportRef.current.id}-images`,
+      })
+    } catch {
+      setMessage('ZIP 打包失败，请重试或先单张下载')
+    } finally {
+      zipDownloadLockRef.current = false
+      setZipDownloading(false)
+    }
   }
 
   const handleCopyPageLink = async () => {
@@ -671,9 +702,10 @@ export default function FormatConverter({ navigate }) {
                   className="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-sm font-semibold">
                   {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} 开始处理
                 </button>
-                <button onClick={() => doneItems.length === 1 ? downloadOne(doneItems[0]) : downloadZip()} disabled={doneItems.length === 0}
+                <button onClick={() => doneItems.length === 1 ? downloadOne(doneItems[0]) : downloadZip()} disabled={doneItems.length === 0 || zipDownloading}
                   className="inline-flex items-center justify-center gap-2 py-2.5 rounded-lg border border-indigo-200 bg-indigo-50 disabled:bg-gray-100 disabled:text-gray-400 text-indigo-700 text-sm font-semibold">
-                  <FileDown className="w-4 h-4" /> {doneItems.length <= 1 ? '下载图片' : '下载全部 ZIP'}
+                  {zipDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                  {zipDownloading ? '正在打包 ZIP' : doneItems.length <= 1 ? '下载图片' : '下载全部 ZIP'}
                 </button>
                 <button onClick={clearItems} disabled={items.length === 0 || processing}
                   className="py-2 text-xs text-gray-500 hover:text-red-600 disabled:text-gray-300">清空列表</button>
