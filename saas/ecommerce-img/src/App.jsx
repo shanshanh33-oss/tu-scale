@@ -209,6 +209,9 @@ const PAGE_META = {
   const [aiUpscale, setAiUpscale] = useState(false)
   const [aiDetailMode, setAiDetailMode] = useState('preserve')
   const [reduceArtifacts, setReduceArtifacts] = useState(false)
+  const [reduceMoire, setReduceMoire] = useState(false)
+  const [faceAwareProtection, setFaceAwareProtection] = useState(true)
+  const [faceSkinStrength, setFaceSkinStrength] = useState(60)
   const [deblur, setDeblur] = useState(false)
   const [autoLevels, setAutoLevels] = useState(false)
   const [vibrance, setVibrance] = useState(false)
@@ -382,6 +385,9 @@ const zipDownloadLockRef = useRef(false)
         if (s.aiUpscale !== undefined) setAiUpscale(s.aiUpscale)
         if (s.aiDetailMode === 'strong' || s.aiDetailMode === 'preserve') setAiDetailMode(s.aiDetailMode)
         if (s.reduceArtifacts !== undefined) setReduceArtifacts(s.reduceArtifacts)
+        if (s.reduceMoire !== undefined) setReduceMoire(s.reduceMoire)
+        if (s.faceAwareProtection !== undefined) setFaceAwareProtection(s.faceAwareProtection)
+        if (Number.isFinite(s.faceSkinStrength)) setFaceSkinStrength(Math.max(0, Math.min(100, s.faceSkinStrength)))
         if (s.deblur !== undefined) setDeblur(s.deblur)
         if (s.autoLevels !== undefined) setAutoLevels(s.autoLevels)
         if (s.vibrance !== undefined) setVibrance(s.vibrance)
@@ -404,10 +410,10 @@ const zipDownloadLockRef = useRef(false)
   // --- 保存设置到 localStorage ---
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      scale, format, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
+      scale, format, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
       keepRatio, customW, customH, fileNameTemplate
     }))
-  }, [scale, format, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
+  }, [scale, format, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
 
   // --- 单图模式 effect ---
   useEffect(() => {
@@ -421,7 +427,7 @@ const zipDownloadLockRef = useRef(false)
     })
     setCompareSourceDims(null)
     setProcessStage('')
-  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, cropEnabled, cropRect])
+  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, cropEnabled, cropRect])
 
   // --- 单图文件处理 ---
   const handleFile = useCallback((f) => {
@@ -871,8 +877,32 @@ const zipDownloadLockRef = useRef(false)
     })
   }
 
+  // 人脸皮肤在高倍放大时降低锐化混合，避免放大前净化过的细纹再次变成摩尔纹；五官已从掩膜中排除。
+  const protectFaceSkinFromSharpening = (sourceData, sharpenedData, faceSkinMask, skinStrength = 0.6) => {
+    if (!faceSkinMask) return sharpenedData
+    const { width, height } = sourceData
+    const output = new Uint8ClampedArray(sharpenedData.data)
+    const response = Math.pow(Math.max(0, Math.min(1, skinStrength)), 1.35)
+    const maxProtection = response * 0.9
+    if (maxProtection <= 0.01) return sharpenedData
+
+    for (let y = 0; y < height; y++) {
+      const maskY = Math.min(faceSkinMask.height - 1, Math.floor(y * faceSkinMask.height / height))
+      for (let x = 0; x < width; x++) {
+        const maskX = Math.min(faceSkinMask.width - 1, Math.floor(x * faceSkinMask.width / width))
+        const protection = (faceSkinMask.data[maskY * faceSkinMask.width + maskX] / 255) * maxProtection
+        if (protection <= 0.01) continue
+        const idx = (y * width + x) * 4
+        for (let c = 0; c < 3; c++) {
+          output[idx + c] = Math.round(sharpenedData.data[idx + c] * (1 - protection) + sourceData.data[idx + c] * protection)
+        }
+      }
+    }
+    return new ImageData(output, width, height)
+  }
+
   // --- Canvas 放大处理（单图和批量共用）---
-  const processImageWithCanvas = (imageUrl, targetW, targetH, doEnhance, fmt, cropOptions = null) => {
+  const processImageWithCanvas = (imageUrl, targetW, targetH, doEnhance, fmt, cropOptions = null, onStage = null) => {
     return new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = async () => {
@@ -924,14 +954,54 @@ const zipDownloadLockRef = useRef(false)
             srcCtx.drawImage(tempCanvas, 0, 0)
           }
 
+          // 在放大前先减少源图中的压缩色块和周期纹理，避免后续重采样放大这些伪影。
+          let faceSkinMask = null
+          if (doEnhance.reduceArtifacts || doEnhance.reduceMoire) {
+            let sourceData = srcCtx.getImageData(0, 0, sourceW, sourceH)
+            if (doEnhance.faceAwareProtection) {
+              onStage?.('检测人脸与皮肤区域')
+              try {
+                const { createFaceSkinMask } = await import('./ai/faceLandmarker')
+                faceSkinMask = await createFaceSkinMask(srcCanvas, doEnhance.faceSkinStrength)
+              } catch (faceError) {
+                console.warn('Face Landmarker unavailable, using the standard artifact filter.', faceError)
+              }
+            }
+            if (doEnhance.reduceArtifacts) {
+              const { faceAwareArtifactFilter } = await import('./ai/faceAwareArtifacts')
+              sourceData = faceAwareArtifactFilter(
+                sourceData,
+                doEnhance.faceAwareProtection ? faceSkinMask : null,
+                doEnhance.faceSkinStrength,
+              )
+            }
+            if (doEnhance.reduceMoire) {
+              // AI 和高倍放大会把非常轻微的周期纹理再次放大，因此在放大前进行两次边缘感知的轻量处理。
+              const moirePasses = doEnhance.aiUpscale || avgScale >= 4 ? 2 : 1
+              const moireStrength = doEnhance.aiUpscale || avgScale >= 4 ? 0.9 : 0.72
+              for (let pass = 0; pass < moirePasses; pass++) {
+                sourceData = moireReductionFilter(
+                  sourceData,
+                  moireStrength,
+                  doEnhance.faceAwareProtection ? faceSkinMask : null,
+                  doEnhance.faceSkinStrength,
+                )
+              }
+            }
+            srcCtx.putImageData(sourceData, 0, 0)
+          }
+
+          onStage?.('放大图片')
+
           // Pre-sharpen original image before upscaling
           if (doEnhance.smartSharpen && passes > 0) {
             const preData = srcCtx.getImageData(0, 0, sourceW, sourceH)
             const preSharp = unsharpMask(preData, sharpenAmount * 0.8)
+            const protectedPreSharp = protectFaceSkinFromSharpening(preData, preSharp, faceSkinMask, doEnhance.faceSkinStrength)
             const tempPre = document.createElement('canvas')
             tempPre.width = sourceW
             tempPre.height = sourceH
-            tempPre.getContext('2d').putImageData(preSharp, 0, 0)
+            tempPre.getContext('2d').putImageData(protectedPreSharp, 0, 0)
             srcCtx.drawImage(tempPre, 0, 0)
           }
 
@@ -958,7 +1028,8 @@ const zipDownloadLockRef = useRef(false)
             if (doEnhance.smartSharpen) {
               const imageData = dstCtx.getImageData(0, 0, targetW, targetH)
               const enhanced = unsharpMask(imageData, sharpenAmount)
-              dstCtx.putImageData(enhanced, 0, 0)
+              const protectedEnhanced = protectFaceSkinFromSharpening(imageData, enhanced, faceSkinMask, doEnhance.faceSkinStrength)
+              dstCtx.putImageData(protectedEnhanced, 0, 0)
             }
             srcCanvas = dstCanvas
           } else {
@@ -976,11 +1047,13 @@ const zipDownloadLockRef = useRef(false)
 
             dstCtx.drawImage(srcCanvas, 0, 0, stepW, stepH)
 
-            if (doEnhance.smartSharpen || doEnhance.reduceArtifacts || i > 0) {
+            if (doEnhance.smartSharpen || i > 0) {
               const imageData = dstCtx.getImageData(0, 0, stepW, stepH)
               let enhanced = imageData
-              if (doEnhance.smartSharpen) enhanced = unsharpMask(enhanced, sharpenAmount)
-              if (doEnhance.reduceArtifacts) enhanced = bilateralFilter(enhanced)
+              if (doEnhance.smartSharpen) {
+                const sharpened = unsharpMask(enhanced, sharpenAmount)
+                enhanced = protectFaceSkinFromSharpening(imageData, sharpened, faceSkinMask, doEnhance.faceSkinStrength)
+              }
               dstCtx.putImageData(enhanced, 0, 0)
             }
             srcCanvas = dstCanvas
@@ -1158,32 +1231,85 @@ const zipDownloadLockRef = useRef(false)
     return new ImageData(output, width, height)
   }
 
-  // --- 双边滤波降噪（去 JPEG 伪影，保留边缘）---
-  const bilateralFilter = (imageData, sigmaS = 1.5, sigmaR = 35) => {
+  // --- 抗摩尔纹（多尺度抑制平缓区域的细密周期纹理，保留强边缘）---
+  const moireReductionFilter = (imageData, strength = 0.65, faceSkinMask = null, skinStrength = 0.6) => {
     const { data, width, height } = imageData
     const output = new Uint8ClampedArray(data)
-    const half = 2 // 5x5 邻域
-    const spatialW = []
-    for (let dy = -half; dy <= half; dy++)
-      for (let dx = -half; dx <= half; dx++)
-        spatialW.push(Math.exp(-(dx * dx + dy * dy) / (2 * sigmaS * sigmaS)))
+    const blurSamples = [
+      [0, 0, 4],
+      [-1, 0, 2], [1, 0, 2], [0, -1, 2], [0, 1, 2],
+      [-1, -1, 1], [1, -1, 1], [-1, 1, 1], [1, 1, 1],
+      [-2, 0, 1], [2, 0, 1], [0, -2, 1], [0, 2, 1],
+    ]
+    const blurWeight = 20
+    const clamp01 = value => Math.max(0, Math.min(1, value))
+    const lumaAt = (x, y) => {
+      const idx = (y * width + x) * 4
+      return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]
+    }
 
-    for (let y = half; y < height - half; y++) {
-      for (let x = half; x < width - half; x++) {
-        const ci = (y * width + x) * 4
-        for (let c = 0; c < 3; c++) {
-          const centerVal = data[ci + c]
-          let tw = 0, total = 0, wi = 0
-          for (let dy = -half; dy <= half; dy++) {
-            for (let dx = -half; dx <= half; dx++) {
-              const pv = data[((y + dy) * width + (x + dx)) * 4 + c]
-              const iw = Math.exp(-(pv - centerVal) * (pv - centerVal) / (2 * sigmaR * sigmaR))
-              const w = spatialW[wi] * iw
-              total += pv * w; tw += w; wi++
-            }
-          }
-          output[ci + c] = Math.max(0, Math.min(255, Math.round(total / tw)))
+    // 5 像素多尺度核比原先的 4 邻域均值更能捕捉 AI 会放大的细密周期纹理。
+    for (let y = 2; y < height - 2; y++) {
+      for (let x = 2; x < width - 2; x++) {
+        const idx = (y * width + x) * 4
+        const centerY = lumaAt(x, y)
+        const leftY = lumaAt(x - 1, y)
+        const rightY = lumaAt(x + 1, y)
+        const topY = lumaAt(x, y - 1)
+        const bottomY = lumaAt(x, y + 1)
+        const farLeftY = lumaAt(x - 2, y)
+        const farRightY = lumaAt(x + 2, y)
+        const farTopY = lumaAt(x, y - 2)
+        const farBottomY = lumaAt(x, y + 2)
+        const localMin = Math.min(centerY, leftY, rightY, topY, bottomY, farLeftY, farRightY, farTopY, farBottomY)
+        const localMax = Math.max(centerY, leftY, rightY, topY, bottomY, farLeftY, farRightY, farTopY, farBottomY)
+        const localRange = localMax - localMin
+        const edgeGradient = Math.abs(leftY - rightY) + Math.abs(topY - bottomY) +
+          0.5 * (Math.abs(farLeftY - farRightY) + Math.abs(farTopY - farBottomY))
+        const edgeProtection = 1 - clamp01((edgeGradient - 10) / 42)
+        const flatAreaProtection = 1 - clamp01((localRange - 24) / 56)
+
+        let meanR = 0
+        let meanG = 0
+        let meanB = 0
+        for (const [offsetX, offsetY, weight] of blurSamples) {
+          const sampleIdx = ((y + offsetY) * width + x + offsetX) * 4
+          meanR += data[sampleIdx] * weight
+          meanG += data[sampleIdx + 1] * weight
+          meanB += data[sampleIdx + 2] * weight
         }
+        meanR /= blurWeight
+        meanG /= blurWeight
+        meanB /= blurWeight
+        const meanY = 0.299 * meanR + 0.587 * meanG + 0.114 * meanB
+        const highFrequency = Math.abs(centerY - meanY)
+        const textureWeight = clamp01((highFrequency - 0.7) / 7.5)
+        const areaWeight = edgeProtection * flatAreaProtection
+        if (areaWeight < 0.04 || highFrequency < 0.35) continue
+
+        let skinWeight = 0
+        if (faceSkinMask) {
+          const maskX = Math.min(faceSkinMask.width - 1, Math.floor(x * faceSkinMask.width / width))
+          const maskY = Math.min(faceSkinMask.height - 1, Math.floor(y * faceSkinMask.height / height))
+          skinWeight = faceSkinMask.data[maskY * faceSkinMask.width + maskX] / 255
+        }
+        const normalizedSkinStrength = Math.max(0, Math.min(1, skinStrength))
+        const skinResponse = Math.pow(normalizedSkinStrength, 1.35)
+        const skinMultiplier = 1 + skinWeight * (-0.75 + skinResponse * 1.9)
+        const localStrength = Math.max(0.08, Math.min(1.25, strength * skinMultiplier))
+        const lumaBlend = localStrength * areaWeight * (0.2 + textureWeight * 0.5)
+        const colorBlend = localStrength * areaWeight * (0.34 + textureWeight * 0.5)
+        const nextY = centerY + (meanY - centerY) * lumaBlend
+        const centerCb = data[idx + 2] - centerY
+        const centerCr = data[idx] - centerY
+        const nextCb = centerCb + ((meanB - meanY) - centerCb) * colorBlend
+        const nextCr = centerCr + ((meanR - meanY) - centerCr) * colorBlend
+        const nextR = nextY + nextCr
+        const nextB = nextY + nextCb
+        const nextG = (nextY - 0.299 * nextR - 0.114 * nextB) / 0.587
+        output[idx] = Math.max(0, Math.min(255, Math.round(nextR)))
+        output[idx + 1] = Math.max(0, Math.min(255, Math.round(nextG)))
+        output[idx + 2] = Math.max(0, Math.min(255, Math.round(nextB)))
       }
     }
     return new ImageData(output, width, height)
@@ -1274,7 +1400,7 @@ const zipDownloadLockRef = useRef(false)
           return compareRes.dataUrl
         })
         setCompareSourceDims({ w: compareRes.width, h: compareRes.height })
-        const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions)
+        const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, setProcessStage)
         setProgress(95)
         setProcessStage('导出结果')
         await new Promise(r => setTimeout(r, 100))
@@ -1304,7 +1430,7 @@ const zipDownloadLockRef = useRef(false)
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -1352,7 +1478,8 @@ const zipDownloadLockRef = useRef(false)
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: aiUpscale ? '加载 AI 模型' : '解析图片' } : it))
           await ensureAiModel()
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
-          const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions)
+          const updateItemStage = (stage) => setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage } : it))
+          const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, updateItemStage)
         clearInterval(timer)
 
         const sizeKB = res.size < 1024 * 1024
@@ -1386,7 +1513,7 @@ const zipDownloadLockRef = useRef(false)
 
     batchCancelRef.current = false
     setBatchProcessing(false)
-  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 单图下载 ---
   const handleDownload = () => {
@@ -1987,6 +2114,56 @@ const zipDownloadLockRef = useRef(false)
                     </div>
                   )}
                 </div>
+                {smartSharpen && (
+                  <p className="mt-2 text-[11px] leading-5 text-gray-400">
+                    人像建议 0.3–0.5，普通照片 0.5–0.8，插画/文字 0.8–1.4。高倍放大建议从低强度开始。
+                  </p>
+                )}
+              </div>
+
+              <div className="border-t border-gray-100 pt-3">
+                <div className="text-xs font-medium text-gray-500 mb-2">放大前净化</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
+                    <input type="checkbox" checked={reduceArtifacts}
+                      onChange={(e) => setReduceArtifacts(e.target.checked)}
+                      className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
+                    <span><strong className="font-semibold text-gray-700">减少色块/伪影</strong><span className="mt-0.5 block leading-4 text-gray-400">放大前减轻 JPEG 压缩色块和细小噪声。</span></span>
+                  </label>
+                  <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
+                    <input type="checkbox" checked={reduceMoire}
+                      onChange={(e) => setReduceMoire(e.target.checked)}
+                      className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
+                    <span><strong className="font-semibold text-gray-700">抗摩尔纹</strong><span className="mt-0.5 block leading-4 text-gray-400">放大前抑制衣物、屏幕等区域的细密周期纹理。</span></span>
+                  </label>
+                  <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none sm:col-span-2">
+                    <input type="checkbox" checked={faceAwareProtection}
+                      onChange={(e) => setFaceAwareProtection(e.target.checked)}
+                      className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
+                    <span><strong className="font-semibold text-indigo-700">人脸智能保护</strong><span className="mt-0.5 block leading-4 text-gray-400">单独控制是否加载本地人脸模型。开启后保护五官线条，并把净化重点放在皮肤区域；关闭后使用普通全图处理。</span></span>
+                  </label>
+                </div>
+                {faceAwareProtection && (
+                  <div className="mt-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <label htmlFor="face-skin-strength" className="text-[11px] font-semibold text-gray-700">皮肤净化程度</label>
+                      <span className="text-[10px] font-medium text-indigo-600">
+                        {faceSkinStrength}% · {faceSkinStrength <= 35 ? '保守' : faceSkinStrength <= 70 ? '平衡' : '加强'}
+                      </span>
+                    </div>
+                    <input id="face-skin-strength" type="range" min="0" max="100" step="5" value={faceSkinStrength}
+                      aria-label="皮肤净化程度"
+                      disabled={!reduceArtifacts && !reduceMoire}
+                      onChange={(e) => setFaceSkinStrength(Number(e.target.value))}
+                      className="mt-2 h-1.5 w-full accent-indigo-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" />
+                    <div className="mt-1 flex justify-between text-[9px] text-gray-400"><span>更多保留肤质</span><span>更强抑制色块/摩尔纹</span></div>
+                    <p className="mt-1.5 text-[10px] leading-4 text-gray-400">
+                      {!reduceArtifacts && !reduceMoire
+                        ? '请先开启“减少色块/伪影”或“抗摩尔纹”，滑杆才会参与处理。'
+                        : '低程度优先保留肤质，高程度扩大处理范围并降低皮肤区域的重复锐化；五官线条仍保持清晰。'}
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="border-t border-gray-100 pt-3">
