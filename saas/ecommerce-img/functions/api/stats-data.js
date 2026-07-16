@@ -42,6 +42,9 @@ const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [met
 
 const createToolBreakdown = () => Object.fromEntries(TOOLS.map((tool) => [tool, createEmptyMetrics()]))
 
+const BUSINESS_FIELDS = ['source', 'scale', 'aiMode', 'aiDetailMode', 'inputPixels', 'outputPixels', 'batchSize', 'duration', 'downloadDelay', 'errorCode']
+const createBusinessSummary = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]))
+
 const normalizeEvent = (event) => EVENTS.includes(event) ? event : ''
 
 const normalizeTool = (tool) => {
@@ -84,6 +87,11 @@ const addEvent = (summary, item) => {
     summary.visitors.push(visitorId)
     summary.toolVisitors[tool].push(visitorId)
   }
+
+  BUSINESS_FIELDS.forEach((field) => {
+    const value = String(item?.analytics?.[field] || '')
+    if (value) summary.business[field][value] = (summary.business[field][value] || 0) + 1
+  })
 }
 
 const getRecordEvents = (record) => {
@@ -105,6 +113,7 @@ const createSummary = () => ({
   eventLogCount: 0,
   legacyReadCount: 0,
   metadataReadCount: 0,
+  business: createBusinessSummary(),
 })
 
 const toPublicSummary = async (day, summary) => {
@@ -127,6 +136,7 @@ const toPublicSummary = async (day, summary) => {
     eventLogCount: summary.eventLogCount,
     legacyReadCount: summary.legacyReadCount,
     metadataReadCount: summary.metadataReadCount,
+    business: summary.business,
   }
 }
 

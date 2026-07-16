@@ -573,6 +573,10 @@ const renderStatsShell = () => `<!doctype html>
       <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>首次导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
     <section>
+      <div class="section-head"><h2>商业行为信号</h2><p>按已结算的匿名事件汇总，用于判断套餐与积分需求。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>指标</th><th>分布</th></tr></thead><tbody id="businessRows"></tbody></table></div>
+    </section>
+    <section>
       <div class="section-head"><h2>最近 30 天</h2><p>独立访客是全站去重来访；浏览事件仅作参考。</p></div>
       <div class="table-wrap"><table><thead><tr><th>日期</th><th>浏览事件（参考）</th><th>独立访客</th><th>访问会话</th><th>上传图片</th><th>处理成功</th><th>成功下载操作</th><th>首次导出图片</th><th>旧口径导出</th></tr></thead><tbody id="dayRows"></tbody></table></div>
     </section>
@@ -592,12 +596,15 @@ const renderStatsShell = () => `<!doctype html>
     const ANOMALOUS_DAYS = { '2026-07-12': '旧版 ZIP 重复触发：426 不是不同图片的成功导出数' };
     const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
+    const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
+    const emptyBusiness = () => Object.fromEntries(Object.keys(BUSINESS_LABELS).map((field) => [field, {}]));
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
     const sum = (source, events) => events.reduce((total, event) => total + (source[event] || 0), 0);
     const percent = (value, total) => total ? Math.round((value / total) * 100) + '%' : '0%';
     const dayText = (offset = 0) => new Date(Date.now() + 8 * 3600 * 1000 - offset * 86400 * 1000).toISOString().slice(0, 10);
     const addMetrics = (target, source) => METRICS.forEach((metric) => { target[metric] += source?.[metric] || 0; });
     const addTools = (target, source) => TOOLS.forEach((tool) => addMetrics(target[tool], source?.[tool] || {}));
+    const addBusiness = (target, source) => Object.keys(target).forEach((field) => Object.entries(source?.[field] || {}).forEach(([key, value]) => { target[field][key] = (target[field][key] || 0) + value; }));
     const uniq = (items) => new Set(items.filter(Boolean)).size;
     const bar = (value, max) => '<div class="bar"><i style="width:' + Math.max(4, Math.round((value / Math.max(1, max)) * 100)) + '%"></i></div>';
     const card = (label, value, hint) => '<article class="metric-card"><span>' + label + '</span><strong>' + fmt(value) + '</strong><small>' + hint + '</small></article>';
@@ -608,12 +615,13 @@ const renderStatsShell = () => `<!doctype html>
       day.eventLogCount += chunk.eventLogCount || 0;
       day.legacyReadCount += chunk.legacyReadCount || 0;
       day.metadataReadCount += chunk.metadataReadCount || 0;
+      addBusiness(day.business, chunk.business);
       day.visitors.push(...(chunk.visitorKeys || chunk.visitors || []));
       TOOLS.forEach((tool) => day.toolVisitors[tool].push(...(chunk.toolVisitorKeys?.[tool] || chunk.toolVisitors?.[tool] || [])));
     };
 
     const loadDay = async (name, onProgress) => {
-      const day = { day: name, ...emptyMetrics(), tools: emptyTools(), visitors: [], toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])), eventLogCount: 0, legacyReadCount: 0, metadataReadCount: 0, settlementStatus: 'pending' };
+      const day = { day: name, ...emptyMetrics(), tools: emptyTools(), business: emptyBusiness(), visitors: [], toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])), eventLogCount: 0, legacyReadCount: 0, metadataReadCount: 0, settlementStatus: 'pending' };
       let cursor = '';
       do {
         const headers = STATS_TOKEN ? { Authorization: 'Bearer ' + STATS_TOKEN } : {};
@@ -634,7 +642,8 @@ const renderStatsShell = () => `<!doctype html>
       const today = days[0] || { ...emptyMetrics(), tools: emptyTools() };
       const totals = emptyMetrics();
       const totalTools = emptyTools();
-      days.forEach((day) => { addMetrics(totals, day); addTools(totalTools, day.tools); });
+      const totalBusiness = emptyBusiness();
+      days.forEach((day) => { addMetrics(totals, day); addTools(totalTools, day.tools); addBusiness(totalBusiness, day.business); });
       const processedTotal = sum(totals, ['process_success', 'batch_item_success']);
       const errors = sum(totals, ['process_error', 'batch_item_error']);
       const exportedToday = today.exported_image || 0;
@@ -652,6 +661,10 @@ const renderStatsShell = () => `<!doctype html>
         const total = totalTools[tool] || emptyMetrics();
         const todayValue = today.tools?.[tool] || emptyMetrics();
         return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(todayValue.exported_image) + '</td></tr>';
+      }).join('');
+      document.getElementById('businessRows').innerHTML = Object.entries(BUSINESS_LABELS).map(([field, label]) => {
+        const values = Object.entries(totalBusiness[field]).sort((a, b) => b[1] - a[1]);
+        return '<tr><td><b>' + label + '</b></td><td>' + (values.length ? values.map(([key, value]) => key + '：' + fmt(value)).join(' / ') : '暂无已结算数据') + '</td></tr>';
       }).join('');
 
       const recent = [...days].reverse();

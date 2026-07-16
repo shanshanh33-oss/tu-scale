@@ -1343,6 +1343,7 @@ export default function BackgroundTool({ navigate }) {
   const handleProcess = useCallback(async () => {
     if (!file || !preview) return
     setProcessing(true)
+    const processingStartedAt = performance.now()
     setCutoutError('')
     setCutoutStatus(method === 'removebg' ? '正在调用 AI 抠图...' : '正在清理纯色背景并生成白底图...')
     try {
@@ -1380,7 +1381,7 @@ export default function BackgroundTool({ navigate }) {
       })
       setCutoutStatus(`${method === 'removebg' ? 'AI 抠图完成' : '已生成白底规范图'}，输出 ${preset.w} x ${preset.h}，${format.label}，${formatBytes(blob.size)}${preset.maxBytes ? ` / 上限 ${formatBytes(preset.maxBytes)}` : ''}。`)
       singleExportIdRef.current = createExportId()
-      trackEvent('process_success', { tool: 'product_image', method, preset: preset.id })
+      trackEvent('process_success', { tool: 'product_image', method, preset: preset.id, outputWidth: preset.w, outputHeight: preset.h, durationMs: Math.round(performance.now() - processingStartedAt) })
     } catch (err) {
       const message = err?.message || '处理失败'
       const friendly = err?.code === 'DAILY_FREE_LIMIT_REACHED' || message.includes('DAILY_FREE_LIMIT_REACHED')
@@ -1391,7 +1392,7 @@ export default function BackgroundTool({ navigate }) {
           ? '后台还没有配置 remove.bg API Key。'
           : message
       setCutoutError(friendly)
-      trackEvent('process_error', { tool: 'product_image', method })
+      trackEvent('process_error', { tool: 'product_image', method, errorCode: message.includes('DAILY_FREE_LIMIT_REACHED') ? 'api_limit' : message.includes('Failed to fetch') ? 'network' : 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
     } finally {
       setProcessing(false)
     }

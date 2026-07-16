@@ -1364,13 +1364,17 @@ const zipDownloadLockRef = useRef(false)
         return
       }
       setProcessing(true)
+      const processingStartedAt = performance.now()
       trackEvent('process_start', {
         mode: 'single',
         ai: aiUpscale,
         aiDetailMode,
         format,
-        scaleMode,
-        outputPixels: expectedOutput ? expectedOutput.w * expectedOutput.h : 0,
+        scale: scaleMode === 'scale' ? String(scale) : 'custom',
+        inputWidth: origDims.w,
+        inputHeight: origDims.h,
+        outputWidth: expectedOutput?.w,
+        outputHeight: expectedOutput?.h,
       })
       setProgress(0)
       setProcessStage('准备处理')
@@ -1418,14 +1422,18 @@ const zipDownloadLockRef = useRef(false)
           ai: aiUpscale,
           aiDetailMode,
           format,
-          width: res.width,
-          height: res.height,
+          outputWidth: res.width,
+          outputHeight: res.height,
+          inputWidth: origDims.w,
+          inputHeight: origDims.h,
+          scale: scaleMode === 'scale' ? String(scale) : 'custom',
+          durationMs: Math.round(performance.now() - processingStartedAt),
         })
       } catch (err) {
         setError(getProcessErrorMessage(err))
         setProgress(0)
         setProcessStage('')
-        trackEvent('process_error', { mode: 'single', ai: aiUpscale })
+        trackEvent('process_error', { mode: 'single', ai: aiUpscale, inputWidth: origDims.w, inputHeight: origDims.h, errorCode: 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
     } finally {
       clearInterval(timer)
       setProcessing(false)
@@ -1438,7 +1446,7 @@ const zipDownloadLockRef = useRef(false)
     if (pending.length === 0) return
 
     setBatchProcessing(true)
-    trackEvent('batch_start', { count: pending.length, ai: aiUpscale, aiDetailMode, format })
+    trackEvent('batch_start', { count: pending.length, batchSize: pending.length, ai: aiUpscale, aiDetailMode, format, scale: scaleMode === 'scale' ? String(scale) : 'custom' })
       setBatchItems(prev => prev.map(it => it.status === 'pending' && it.preview && it.origDims
         ? { ...it, status: 'pending', progress: 0, result: null, resultBlob: null, resultDims: null, resultSize: null, error: null, stage: '' }
         : it
@@ -1450,6 +1458,7 @@ const zipDownloadLockRef = useRef(false)
         setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'processing', progress: 0, stage: '准备处理' } : it))
 
       let p = 0
+      const processingStartedAt = performance.now()
       const tick = () => {
         if (p < 30) p += 5
         else if (p < 70) p += 3
@@ -1501,13 +1510,18 @@ const zipDownloadLockRef = useRef(false)
             ai: aiUpscale,
             aiDetailMode,
             format,
-            width: res.width,
-            height: res.height,
+            outputWidth: res.width,
+            outputHeight: res.height,
+            inputWidth: item.origDims.w,
+            inputHeight: item.origDims.h,
+            batchSize: pending.length,
+            scale: scaleMode === 'scale' ? String(scale) : 'custom',
+            durationMs: Math.round(performance.now() - processingStartedAt),
           })
         } catch (err) {
           clearInterval(timer)
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'error', progress: 0, error: getProcessErrorMessage(err), stage: '' } : it))
-          trackEvent('batch_item_error', { ai: aiUpscale })
+          trackEvent('batch_item_error', { ai: aiUpscale, inputWidth: item.origDims.w, inputHeight: item.origDims.h, batchSize: pending.length, errorCode: 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
         }
     }
 

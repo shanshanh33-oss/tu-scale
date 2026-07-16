@@ -21,6 +21,41 @@ const EVENT_LOG_TTL = 60 * 60 * 24 * 60
 const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image'])
 const IDEMPOTENT_EVENTS = new Set(['download_success', 'exported_image'])
 const MAX_BATCH_EVENTS = 5
+const SOURCE_VALUES = new Set(['direct', 'google', 'baidu', 'external'])
+const ERROR_CODES = new Set(['image_decode', 'file_read', 'canvas_limit', 'ai_input_limit', 'ai_model', 'export', 'network', 'api_limit', 'unsupported_format', 'unknown'])
+
+const clampInteger = (value, min, max) => {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : 0
+}
+
+const bucketPixels = (width, height) => {
+  const pixels = clampInteger(width, 0, 50000) * clampInteger(height, 0, 50000)
+  if (!pixels) return ''
+  if (pixels < 1_000_000) return 'under_1mp'
+  if (pixels < 4_000_000) return '1_to_4mp'
+  if (pixels < 12_000_000) return '4_to_12mp'
+  return 'over_12mp'
+}
+
+const bucketCount = (value) => {
+  const count = clampInteger(value, 0, 100)
+  if (!count) return ''
+  if (count === 1) return '1'
+  if (count <= 5) return '2_to_5'
+  if (count <= 20) return '6_to_20'
+  if (count <= 50) return '21_to_50'
+  return 'over_50'
+}
+
+const bucketDuration = (value) => {
+  const duration = clampInteger(value, 0, 30 * 60 * 1000)
+  if (!duration) return ''
+  if (duration < 3000) return 'under_3s'
+  if (duration < 10000) return '3_to_10s'
+  if (duration < 30000) return '10_to_30s'
+  return 'over_30s'
+}
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -56,6 +91,18 @@ const normalizeEventPayload = (item) => {
     tool,
     visitorId: ID_PATTERN.test(visitorId) ? visitorId : '',
     sessionId: ID_PATTERN.test(sessionId) ? sessionId : '',
+    analytics: {
+      source: SOURCE_VALUES.has(data.source) ? data.source : '',
+      scale: ['1', '2', '4', 'custom'].includes(String(data.scale || '')) ? String(data.scale) : '',
+      aiMode: data.ai === true ? 'ai' : data.ai === false ? 'standard' : '',
+      aiDetailMode: ['photo', 'anime'].includes(String(data.aiDetailMode || '')) ? String(data.aiDetailMode) : '',
+      inputPixels: bucketPixels(data.inputWidth, data.inputHeight),
+      outputPixels: bucketPixels(data.outputWidth, data.outputHeight),
+      batchSize: bucketCount(data.batchSize || data.count),
+      duration: bucketDuration(data.durationMs),
+      downloadDelay: bucketDuration(data.downloadDelayMs),
+      errorCode: ERROR_CODES.has(data.errorCode) ? data.errorCode : '',
+    },
   }
 }
 

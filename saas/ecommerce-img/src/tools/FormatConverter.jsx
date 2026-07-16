@@ -403,7 +403,8 @@ export default function FormatConverter({ navigate }) {
 
     setProcessing(true)
     setMessage('')
-    trackEvent('process_start', { tool: 'converter', mode: 'compressor', count: ready.length, format, preset: sizePreset, targetKb })
+    const processingStartedAt = performance.now()
+    trackEvent('process_start', { tool: 'converter', mode: 'compressor', count: ready.length, batchSize: ready.length, format, preset: sizePreset, targetKb })
 
     for (const item of ready) {
       setItems(prev => prev.map(current => current.id === item.id ? { ...current, status: 'processing', error: '' } : current))
@@ -414,13 +415,13 @@ export default function FormatConverter({ navigate }) {
           revokeObjectUrl(current.url)
           return { ...current, status: 'done', ...result, exportId: createExportId() }
         }))
-        trackEvent('process_success', { tool: 'converter', mode: 'compressor', format })
+        trackEvent('process_success', { tool: 'converter', mode: 'compressor', format, inputWidth: item.width, inputHeight: item.height, outputWidth: result.outputWidth, outputHeight: result.outputHeight, batchSize: ready.length, durationMs: Math.round(performance.now() - processingStartedAt) })
       } catch {
         setItems(prev => prev.map(current => current.id === item.id
           ? { ...current, status: 'error', error: '处理失败，请换一种输出格式或调小尺寸' }
           : current
         ))
-        trackEvent('process_error', { tool: 'converter', mode: 'compressor', format })
+        trackEvent('process_error', { tool: 'converter', mode: 'compressor', format, inputWidth: item.width, inputHeight: item.height, batchSize: ready.length, errorCode: 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
       }
     }
 

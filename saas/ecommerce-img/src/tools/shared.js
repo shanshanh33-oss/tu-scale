@@ -87,6 +87,20 @@ const inferTool = () => {
   return window.location.pathname === '/format-converter' ? 'converter' : 'upscale'
 }
 
+const getTrafficSource = () => {
+  if (typeof document === 'undefined') return 'direct'
+  const referrer = document.referrer
+  if (!referrer) return 'direct'
+  try {
+    const host = new URL(referrer).hostname.toLowerCase()
+    if (/(^|\.)google\./.test(host)) return 'google'
+    if (/(^|\.)baidu\.com$/.test(host)) return 'baidu'
+  } catch {
+    // Only a four-value source category is recorded; malformed referrers are external.
+  }
+  return 'external'
+}
+
 const sendAnalyticsEvents = (events, useBeacon = false) => {
   if (typeof window === 'undefined') return
   const payload = JSON.stringify({ events })
@@ -135,6 +149,7 @@ export const trackEvent = (event, data = {}) => {
     eventId: data.eventId || createAnalyticsId('e'),
     data: {
       tool: inferTool(),
+      source: getTrafficSource(),
       ...data,
       ...getAnalyticsIdentity(),
     },
