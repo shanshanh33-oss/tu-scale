@@ -20,6 +20,7 @@ const METRICS = [...EVENTS, 'unique_visitor']
 const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
 const PAGE_SIZE = 1000
 const MAX_SETTLEMENT_PAGES = 20
+const STATS_START_DATE = '2026-06-28'
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -203,6 +204,7 @@ export async function onRequestGet(context) {
   const day = url.searchParams.get('day') || getChinaDate()
 
   if (!isValidDay(day)) return json({ ok: false, error: 'INVALID_DAY' }, 400)
+  if (day < STATS_START_DATE) return json({ ok: false, error: 'ARCHIVED_DAY' }, 410)
 
   let storedSummary
   try {

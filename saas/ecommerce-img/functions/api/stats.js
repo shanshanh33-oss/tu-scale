@@ -22,6 +22,7 @@ const METRICS = [
 ]
 
 const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
+const STATS_START_DATE = '2026-06-28'
 
 const TOOL_LABELS = {
   upscale: '图片放大',
@@ -473,7 +474,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
 
     <section>
       <div class="section-head">
-        <h2>最近 30 天</h2>
+        <h2>自 2026-06-28 起</h2>
         <p>独立访客是全站去重来访；浏览事件仅作参考。</p>
       </div>
       <div class="table-wrap">
@@ -577,7 +578,7 @@ const renderStatsShell = () => `<!doctype html>
       <div class="table-wrap"><table><thead><tr><th>指标</th><th>分布</th></tr></thead><tbody id="businessRows"></tbody></table></div>
     </section>
     <section>
-      <div class="section-head"><h2>最近 30 天</h2><p>独立访客是全站去重来访；浏览事件仅作参考。</p></div>
+      <div class="section-head"><h2>自 2026-06-28 起</h2><p>独立访客是全站去重来访；浏览事件仅作参考。</p></div>
       <div class="table-wrap"><table><thead><tr><th>日期</th><th>浏览事件（参考）</th><th>独立访客</th><th>访问会话</th><th>上传图片</th><th>处理成功</th><th>成功下载操作</th><th>首次导出图片</th><th>旧口径导出</th></tr></thead><tbody id="dayRows"></tbody></table></div>
     </section>
     <section>
@@ -598,6 +599,7 @@ const renderStatsShell = () => `<!doctype html>
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
     const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
     const emptyBusiness = () => Object.fromEntries(Object.keys(BUSINESS_LABELS).map((field) => [field, {}]));
+    const STATS_START_DATE = '${STATS_START_DATE}';
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
     const sum = (source, events) => events.reduce((total, event) => total + (source[event] || 0), 0);
     const percent = (value, total) => total ? Math.round((value / total) * 100) + '%' : '0%';
@@ -693,7 +695,7 @@ const renderStatsShell = () => `<!doctype html>
       const status = document.getElementById('status');
       let chunks = 0;
       const days = [];
-      for (let i = 0; i < 30; i += 1) {
+      for (let i = 0; dayText(i) >= STATS_START_DATE; i += 1) {
         const name = dayText(i);
         status.textContent = '读取 ' + name;
         days.push(await loadDay(name, () => { chunks += 1; status.textContent = '已读 ' + chunks + ' 批'; }));
@@ -729,7 +731,7 @@ export async function onRequestGet(context) {
 
   if (wantsHtml && !wantsJson) return html(renderStatsShell())
   if (wantsJson || !wantsHtml) {
-    const days = Array.from({ length: 30 }, (_, index) => getChinaDate(index))
+    const days = Array.from({ length: 30 }, (_, index) => getChinaDate(index)).filter((day) => day >= STATS_START_DATE)
     return json({
       ok: true,
       timezone: 'Asia/Shanghai',
@@ -760,7 +762,7 @@ export async function onRequestGet(context) {
 
     const todayDate = getChinaDate()
     const summaries = []
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; getChinaDate(i) >= STATS_START_DATE; i++) {
       const day = getChinaDate(i)
       summaries.push(await getDaySummary(kv, day))
     }
