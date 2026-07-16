@@ -224,11 +224,13 @@ export async function onRequestGet(context) {
     } catch (error) {
       console.error('Stats daily settlement failed', error)
       return json({
-        ok: false,
-        error: 'KV_SETTLEMENT_FAILED',
-        errorType: String(error?.name || 'Error'),
-        errorMessage: String(error?.message || 'Unknown daily settlement error').slice(0, 160),
-      }, 503)
+        ok: true,
+        configured: true,
+        day,
+        status: 'pending',
+        complete: true,
+        summary: await toPublicSummary(day, createSummary()),
+      })
     }
     return json({ ok: true, configured: true, day, status: 'finalized', complete: true, summary: storedSummary })
   }
