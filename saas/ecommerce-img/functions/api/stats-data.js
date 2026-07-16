@@ -111,7 +111,13 @@ export async function onRequestGet(context) {
     limit: PAGE_SIZE,
   }
   if (cursor) listOptions.cursor = cursor
-  const listed = await kv.list(listOptions)
+  let listed
+  try {
+    listed = await kv.list(listOptions)
+  } catch (error) {
+    console.error('Stats KV list failed', error)
+    return json({ ok: false, error: 'KV_LIST_FAILED' }, 503)
+  }
 
   const summary = {
     totals: createEmptyMetrics(),
