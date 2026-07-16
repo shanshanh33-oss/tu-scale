@@ -83,9 +83,11 @@ const getChinaDate = (offset = 0) => {
 
 const readKvList = async (kv, prefix, maxKeys = 20000) => {
   const keys = []
-  let cursor
+  let cursor = ''
   do {
-    const result = await kv.list({ prefix, cursor })
+    const listOptions = { prefix }
+    if (cursor) listOptions.cursor = cursor
+    const result = await kv.list(listOptions)
     keys.push(...(result.keys || []))
     cursor = result.list_complete ? undefined : result.cursor
   } while (cursor && keys.length < maxKeys)

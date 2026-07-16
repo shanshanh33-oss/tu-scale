@@ -102,15 +102,16 @@ export async function onRequestGet(context) {
 
   const url = new URL(context.request.url)
   const day = url.searchParams.get('day') || getChinaDate()
-  const cursor = url.searchParams.get('cursor') || undefined
+  const cursor = url.searchParams.get('cursor') || ''
 
   if (!isValidDay(day)) return json({ ok: false, error: 'INVALID_DAY' }, 400)
 
-  const listed = await kv.list({
+  const listOptions = {
     prefix: `event:${day}:`,
-    cursor,
     limit: PAGE_SIZE,
-  })
+  }
+  if (cursor) listOptions.cursor = cursor
+  const listed = await kv.list(listOptions)
 
   const summary = {
     totals: createEmptyMetrics(),
