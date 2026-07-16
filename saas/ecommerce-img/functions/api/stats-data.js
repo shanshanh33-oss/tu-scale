@@ -116,7 +116,12 @@ export async function onRequestGet(context) {
     listed = await kv.list(listOptions)
   } catch (error) {
     console.error('Stats KV list failed', error)
-    return json({ ok: false, error: 'KV_LIST_FAILED' }, 503)
+    return json({
+      ok: false,
+      error: 'KV_LIST_FAILED',
+      errorType: String(error?.name || 'Error'),
+      errorMessage: String(error?.message || 'Unknown KV list error').slice(0, 160),
+    }, 503)
   }
 
   const summary = {
