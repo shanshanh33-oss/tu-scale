@@ -563,7 +563,7 @@ const renderStatsShell = () => `<!doctype html>
     <header>
       <div>
         <h1>TU Scale 流量统计</h1>
-        <p>按北京时间统计。页面会分批读取原始日志，避免单次 Worker 读取过多导致失败。</p>
+        <p>按北京时间统计。当天数据在次日结算，结算后只读取每日汇总。</p>
       </div>
       <span id="status" class="status">正在读取</span>
     </header>
@@ -580,7 +580,7 @@ const renderStatsShell = () => `<!doctype html>
       <div class="section-head"><h2>事件明细</h2><p>给调试和判断功能使用情况时看。</p></div>
       <div class="table-wrap"><table><thead><tr><th>中文名称</th><th>事件名</th><th>累计</th><th>今天</th></tr></thead><tbody id="eventRows"></tbody></table></div>
     </section>
-    <p id="note" class="note">正在读取原始日志。</p>
+    <p id="note" class="note">正在读取每日汇总。</p>
   </main>
   <script>
     const EVENTS = ${JSON.stringify(EVENTS)};
@@ -613,13 +613,14 @@ const renderStatsShell = () => `<!doctype html>
     };
 
     const loadDay = async (name, onProgress) => {
-      const day = { day: name, ...emptyMetrics(), tools: emptyTools(), visitors: [], toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])), eventLogCount: 0, legacyReadCount: 0, metadataReadCount: 0 };
+      const day = { day: name, ...emptyMetrics(), tools: emptyTools(), visitors: [], toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])), eventLogCount: 0, legacyReadCount: 0, metadataReadCount: 0, settlementStatus: 'pending' };
       let cursor = '';
       do {
         const headers = STATS_TOKEN ? { Authorization: 'Bearer ' + STATS_TOKEN } : {};
         const res = await fetch('/api/stats-data?day=' + encodeURIComponent(name) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { cache: 'no-store', headers });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'STATS_DATA_FAILED');
+        day.settlementStatus = data.status || 'finalized';
         mergeChunk(day, data.summary);
         cursor = data.cursor || '';
         onProgress();
@@ -639,9 +640,9 @@ const renderStatsShell = () => `<!doctype html>
       const exportedToday = today.exported_image || 0;
       const exportedTotal = totals.exported_image || 0;
       document.getElementById('metrics').innerHTML = [
-        card('今日独立访客', today.unique_visitor, '访问会话 ' + fmt(today.session_start)),
-        card('今天上传', today.image_uploaded, '处理成功 ' + fmt(sum(today, ['process_success', 'batch_item_success']))),
-        card('今天首次导出图片', exportedToday, '成功下载操作 ' + fmt(today.download_success)),
+        card('今日独立访客', today.unique_visitor, today.settlementStatus === 'collecting' ? '当天数据将在次日结算' : '访问会话 ' + fmt(today.session_start)),
+        card('今天上传', today.image_uploaded, today.settlementStatus === 'collecting' ? '当天数据将在次日结算' : '处理成功 ' + fmt(sum(today, ['process_success', 'batch_item_success']))),
+        card('今天首次导出图片', exportedToday, today.settlementStatus === 'collecting' ? '当天数据将在次日结算' : '成功下载操作 ' + fmt(today.download_success)),
         card('累计独立访客', totals.unique_visitor, '累计会话 ' + fmt(totals.session_start)),
         card('累计上传', totals.image_uploaded, '成功处理 ' + fmt(processedTotal)),
         card('累计首次导出图片', exportedTotal, '成功下载操作 ' + fmt(totals.download_success)),
@@ -662,14 +663,17 @@ const renderStatsShell = () => `<!doctype html>
         const exported = day.exported_image || 0;
         const legacyExported = sum(day, ['download', 'download_zip']);
         const anomaly = ANOMALOUS_DAYS[day.day] ? '<span class="anomaly">' + ANOMALOUS_DAYS[day.day] + '</span>' : '';
-        return '<tr><td>' + day.day + anomaly + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(day.download_success) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td><td><b>' + fmt(legacyExported) + '</b></td></tr>';
+        const settlement = day.settlementStatus === 'collecting' ? '<span class="anomaly">当天数据将在次日结算</span>' : (day.settlementStatus === 'pending' ? '<span class="anomaly">等待历史汇总</span>' : '');
+        return '<tr><td>' + day.day + anomaly + settlement + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(day.download_success) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td><td><b>' + fmt(legacyExported) + '</b></td></tr>';
       }).join('');
 
       document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(today[event]) + '</td></tr>').join('');
       const eventLogs = days.reduce((total, day) => total + day.eventLogCount, 0);
       const legacyReads = days.reduce((total, day) => total + day.legacyReadCount, 0);
       const metadataReads = days.reduce((total, day) => total + day.metadataReadCount, 0);
-      document.getElementById('note').textContent = '口径说明：成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已读取原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
+      const finalizedDays = days.filter((day) => day.settlementStatus === 'finalized').length;
+      const pendingDays = days.filter((day) => day.settlementStatus === 'pending').length;
+      document.getElementById('note').textContent = '口径说明：当天事件会在次日首次查看统计时结算为每日汇总，避免反复扫描原始日志。当前已结算 ' + fmt(finalizedDays) + ' 天，等待历史汇总 ' + fmt(pendingDays) + ' 天。成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已结算原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
     };
 
     (async () => {

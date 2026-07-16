@@ -18,7 +18,8 @@ const EVENTS = [
 
 const METRICS = [...EVENTS, 'unique_visitor']
 const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
-const PAGE_SIZE = 30
+const PAGE_SIZE = 1000
+const MAX_SETTLEMENT_PAGES = 20
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -32,6 +33,8 @@ const getChinaDate = (offset = 0) => {
   const time = Date.now() + 8 * 60 * 60 * 1000 - offset * 24 * 60 * 60 * 1000
   return new Date(time).toISOString().slice(0, 10)
 }
+
+const getDailySummaryKey = (day) => `daily-summary:${day}`
 
 const isValidDay = (day) => /^\d{4}-\d{2}-\d{2}$/.test(day)
 
@@ -94,6 +97,92 @@ const getMetadataEvents = (metadata) => {
   return []
 }
 
+const createSummary = () => ({
+  totals: createEmptyMetrics(),
+  tools: createToolBreakdown(),
+  visitors: [],
+  toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])),
+  eventLogCount: 0,
+  legacyReadCount: 0,
+  metadataReadCount: 0,
+})
+
+const toPublicSummary = async (day, summary) => {
+  const visitorKeys = await hashVisitorIds(day, summary.visitors)
+  const toolVisitorKeys = Object.fromEntries(await Promise.all(TOOLS.map(async (tool) => [
+    tool,
+    await hashVisitorIds(day, summary.toolVisitors[tool]),
+  ])))
+
+  summary.totals.unique_visitor = new Set(visitorKeys).size
+  TOOLS.forEach((tool) => {
+    summary.tools[tool].unique_visitor = new Set(toolVisitorKeys[tool]).size
+  })
+
+  return {
+    totals: summary.totals,
+    tools: summary.tools,
+    visitorKeys,
+    toolVisitorKeys,
+    eventLogCount: summary.eventLogCount,
+    legacyReadCount: summary.legacyReadCount,
+    metadataReadCount: summary.metadataReadCount,
+  }
+}
+
+const readDailySummary = async (kv, day) => {
+  const value = await kv.get(getDailySummaryKey(day))
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+const settleDay = async (kv, day) => {
+  const summary = createSummary()
+  let cursor = ''
+  let pageCount = 0
+
+  do {
+    const listOptions = { prefix: `event:${day}:`, limit: PAGE_SIZE }
+    if (cursor) listOptions.cursor = cursor
+    const listed = await kv.list(listOptions)
+    pageCount += 1
+    if (pageCount > MAX_SETTLEMENT_PAGES) throw new Error('Daily settlement is too large')
+
+    for (const key of listed.keys || []) {
+      summary.eventLogCount += 1
+      const metadataEvents = getMetadataEvents(key.metadata)
+      if (metadataEvents.length) {
+        metadataEvents.forEach((item) => addEvent(summary, item))
+        summary.metadataReadCount += 1
+        continue
+      }
+
+      const value = await kv.get(key.name)
+      summary.legacyReadCount += 1
+      try {
+        getRecordEvents(JSON.parse(value || '{}')).forEach((item) => addEvent(summary, item))
+      } catch {
+        // Broken analytics records are ignored so one bad row cannot break settlement.
+      }
+    }
+    cursor = listed.list_complete ? '' : listed.cursor
+  } while (cursor)
+
+  const publicSummary = await toPublicSummary(day, summary)
+  const storedSummary = {
+    version: 1,
+    day,
+    finalizedAt: new Date().toISOString(),
+    ...publicSummary,
+  }
+  await kv.put(getDailySummaryKey(day), JSON.stringify(storedSummary))
+  return storedSummary
+}
+
 export async function onRequestGet(context) {
   if (!isStatsAuthorized(context)) return json({ ok: false, error: 'UNAUTHORIZED' }, 401)
 
@@ -102,75 +191,54 @@ export async function onRequestGet(context) {
 
   const url = new URL(context.request.url)
   const day = url.searchParams.get('day') || getChinaDate()
-  const cursor = url.searchParams.get('cursor') || ''
 
   if (!isValidDay(day)) return json({ ok: false, error: 'INVALID_DAY' }, 400)
 
-  const listOptions = {
-    prefix: `event:${day}:`,
-    limit: PAGE_SIZE,
-  }
-  if (cursor) listOptions.cursor = cursor
-  let listed
+  let storedSummary
   try {
-    listed = await kv.list(listOptions)
+    storedSummary = await readDailySummary(kv, day)
   } catch (error) {
-    console.error('Stats KV list failed', error)
+    console.error('Stats daily summary read failed', error)
     return json({
       ok: false,
-      error: 'KV_LIST_FAILED',
+      error: 'KV_SUMMARY_READ_FAILED',
       errorType: String(error?.name || 'Error'),
-      errorMessage: String(error?.message || 'Unknown KV list error').slice(0, 160),
+      errorMessage: String(error?.message || 'Unknown KV summary read error').slice(0, 160),
     }, 503)
   }
 
-  const summary = {
-    totals: createEmptyMetrics(),
-    tools: createToolBreakdown(),
-    visitors: [],
-    toolVisitors: Object.fromEntries(TOOLS.map((tool) => [tool, []])),
-    eventLogCount: listed.keys?.length || 0,
-    legacyReadCount: 0,
-    metadataReadCount: 0,
+  if (storedSummary) {
+    return json({
+      ok: true,
+      configured: true,
+      day,
+      status: 'finalized',
+      complete: true,
+      summary: storedSummary,
+    })
   }
 
-  for (const key of listed.keys || []) {
-    const metadataEvents = getMetadataEvents(key.metadata)
-    if (metadataEvents.length) {
-      metadataEvents.forEach((item) => addEvent(summary, item))
-      summary.metadataReadCount += 1
-      continue
-    }
-
-    const value = await kv.get(key.name)
-    summary.legacyReadCount += 1
+  if (day === getChinaDate(1)) {
     try {
-      getRecordEvents(JSON.parse(value || '{}')).forEach((item) => addEvent(summary, item))
-    } catch {
-      // Broken analytics records are ignored so one bad row cannot break the page.
+      storedSummary = await settleDay(kv, day)
+    } catch (error) {
+      console.error('Stats daily settlement failed', error)
+      return json({
+        ok: false,
+        error: 'KV_SETTLEMENT_FAILED',
+        errorType: String(error?.name || 'Error'),
+        errorMessage: String(error?.message || 'Unknown daily settlement error').slice(0, 160),
+      }, 503)
     }
+    return json({ ok: true, configured: true, day, status: 'finalized', complete: true, summary: storedSummary })
   }
-
-  const visitorKeys = await hashVisitorIds(day, summary.visitors)
-  const toolVisitorKeys = Object.fromEntries(await Promise.all(TOOLS.map(async (tool) => [
-    tool,
-    await hashVisitorIds(day, summary.toolVisitors[tool]),
-  ])))
 
   return json({
     ok: true,
     configured: true,
     day,
-    cursor: listed.list_complete ? '' : listed.cursor,
-    complete: Boolean(listed.list_complete),
-    summary: {
-      totals: summary.totals,
-      tools: summary.tools,
-      visitorKeys,
-      toolVisitorKeys,
-      eventLogCount: summary.eventLogCount,
-      legacyReadCount: summary.legacyReadCount,
-      metadataReadCount: summary.metadataReadCount,
-    },
+    status: day === getChinaDate() ? 'collecting' : 'pending',
+    complete: true,
+    summary: await toPublicSummary(day, createSummary()),
   })
 }
