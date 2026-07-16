@@ -50,6 +50,11 @@ let analyticsQueue = []
 let analyticsFlushTimer = null
 let analyticsListenersReady = false
 
+const isLocalAnalyticsEnvironment = () => {
+  if (typeof window === 'undefined') return false
+  return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(window.location.hostname)
+}
+
 const createAnalyticsId = (prefix) => {
   const random = crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   return `${prefix}_${random}`
@@ -123,7 +128,7 @@ const ensureAnalyticsFlushListeners = () => {
 }
 
 export const trackEvent = (event, data = {}) => {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined' || isLocalAnalyticsEnvironment()) return
   ensureAnalyticsFlushListeners()
   analyticsQueue.push({
     event,
