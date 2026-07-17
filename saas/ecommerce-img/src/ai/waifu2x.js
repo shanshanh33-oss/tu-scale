@@ -1,61 +1,18 @@
 // waifu2x AI 放大模块
-import wasmRuntimeUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
-
 const MODEL_PATH = '/models/waifu2x.onnx';
 const SERVER_URL = 'http://localhost:5179';
-const MODEL_PADDING = 7;
-const LOW_MEMORY_TILE_SIZE = 192;
-const MOBILE_TILE_SIZE = 256;
-const DESKTOP_TILE_SIZE = 384;
+const WASM_PATH = '/assets/ort-wasm-simd-threaded-Cpm-ox6i.wasm';
 let session = null;
-let runtime = null;
 let useLocalModel = null;
 let loadingPromise = null;
 let modelStatus = 'unloaded';
 
-function configureWasm(ort) {
-  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
-  var canUseThreads = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
-  var threadLimit = deviceMemory >= 8 && hardwareThreads >= 8 ? 4 : 2;
-  ort.env.wasm.numThreads = canUseThreads && !(deviceMemory > 0 && deviceMemory <= 4)
-    ? Math.max(1, Math.min(threadLimit, hardwareThreads || 1))
-    : 1;
-  ort.env.wasm.proxy = false;
-  // Let Vite provide the actual fingerprinted asset URL instead of relying on
-  // a build-specific filename that can change after dependency updates.
-  ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': wasmRuntimeUrl };
-}
-
-async function loadWasmOrt() {
+async function loadOrt() {
   var ort = await import('onnxruntime-web/wasm');
-  configureWasm(ort);
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy = false;
+  ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': WASM_PATH };
   return ort;
-}
-
-async function createBrowserSession(buffer) {
-  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var lowMemoryDevice = deviceMemory > 0 && deviceMemory <= 4;
-  if (typeof navigator !== 'undefined' && navigator.gpu && !lowMemoryDevice) {
-    try {
-      var webgpuOrt = await import('onnxruntime-web/webgpu');
-      webgpuOrt.env.webgpu.powerPreference = 'high-performance';
-      var webgpuSession = await webgpuOrt.InferenceSession.create(buffer, {
-        executionProviders: [{ name: 'webgpu', preferredLayout: 'NHWC' }],
-        graphOptimizationLevel: 'all',
-      });
-      return { ort: webgpuOrt, session: webgpuSession, backend: 'webgpu' };
-    } catch (webgpuError) {
-      console.warn('WebGPU unavailable for waifu2x, falling back to WASM.', webgpuError);
-    }
-  }
-
-  var wasmOrt = await loadWasmOrt();
-  var wasmSession = await wasmOrt.InferenceSession.create(buffer, {
-    executionProviders: ['wasm'],
-    graphOptimizationLevel: 'all',
-  });
-  return { ort: wasmOrt, session: wasmSession, backend: 'wasm' };
 }
 
 export async function loadModel() {
@@ -66,9 +23,7 @@ export async function loadModel() {
     modelStatus = 'loading';
 
     // 先试本地服务（开发环境效果最好）
-    var mobileLayout = typeof window !== 'undefined' && window.innerWidth <= 767;
     try {
-      if (mobileLayout) throw new Error('Skip desktop localhost probe on mobile');
       var r = await fetch(SERVER_URL + '/process', { method: 'OPTIONS', signal: AbortSignal.timeout(1500) });
       if (r.ok) {
         useLocalModel = false;
@@ -83,12 +38,11 @@ export async function loadModel() {
     try {
       var res = await fetch(MODEL_PATH);
       if (res.ok) {
+        var ort = await loadOrt();
         var buf = await res.arrayBuffer();
-        var browser = await createBrowserSession(buf);
-        runtime = browser.ort;
-        session = browser.session;
+        session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
         useLocalModel = true;
-        modelStatus = browser.backend;
+        modelStatus = 'loaded';
         return true;
       }
     } catch {
@@ -118,135 +72,101 @@ export async function upscaleWithAI(imageData, scale = 2, options = {}) {
   throw new Error('AI model not available');
 }
 
-function getTileSize(options = {}) {
-  if (Number.isFinite(options.tileSize)) {
-    return Math.max(64, Math.min(512, Math.round(options.tileSize)));
-  }
-  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
-  var mobileLayout = typeof window !== 'undefined' && window.innerWidth <= 767;
-  if (deviceMemory > 0 && deviceMemory <= 4) return LOW_MEMORY_TILE_SIZE;
-  if (modelStatus === 'webgpu' && deviceMemory >= 8) return DESKTOP_TILE_SIZE;
-  if (modelStatus === 'webgpu' && deviceMemory === 0 && hardwareThreads >= 8) return 320;
-  return mobileLayout ? MOBILE_TILE_SIZE : DESKTOP_TILE_SIZE;
-}
-
-export function createTilePlan(width, height, tileSize, padding = MODEL_PADDING) {
-  var tiles = [];
-  for (let coreY = 0; coreY < height; coreY += tileSize) {
-    for (let coreX = 0; coreX < width; coreX += tileSize) {
-      var coreWidth = Math.min(tileSize, width - coreX);
-      var coreHeight = Math.min(tileSize, height - coreY);
-      tiles.push({
-        coreX,
-        coreY,
-        coreWidth,
-        coreHeight,
-        padding,
-        inputWidth: coreWidth + padding * 2 + (coreWidth % 2),
-        inputHeight: coreHeight + padding * 2 + (coreHeight % 2),
-      });
-    }
-  }
-  return tiles;
-}
-
-function yieldToBrowser() {
-  return new Promise(function(resolve) {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() { resolve(); });
-    else setTimeout(resolve, 0);
-  });
-}
-
 async function runLocal(imageData, options = {}) {
-  var tileSize = getTileSize(options);
-  var tiles = createTilePlan(imageData.width, imageData.height, tileSize);
-  var ort = runtime || await loadWasmOrt();
-  var outputWidth = imageData.width * 2;
-  var outputHeight = imageData.height * 2;
-  var outputData = new Uint8ClampedArray(outputWidth * outputHeight * 4);
-  var inputBuffers = new Map();
-  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var yieldEvery = deviceMemory > 0 && deviceMemory <= 4 ? 2 : modelStatus === 'webgpu' ? 8 : 4;
-  var opaque = true;
-  for (let alphaIndex = 3; alphaIndex < imageData.data.length; alphaIndex += 4) {
-    if (imageData.data[alphaIndex] !== 255) {
-      opaque = false;
-      break;
-    }
-  }
-
-  for (let index = 0; index < tiles.length; index++) {
-    var tile = tiles[index];
-    var tileResult = await runLocalTile(imageData, tile, ort, inputBuffers);
-    copyModelTile(tileResult, imageData, outputData, outputWidth, tile, opaque);
-    options.onProgress?.({ completed: index + 1, total: tiles.length });
-    if ((index + 1) % yieldEvery === 0 || index === tiles.length - 1) await yieldToBrowser();
-  }
-
-  return new ImageData(outputData, outputWidth, outputHeight);
-}
-
-async function runLocalTile(imageData, tile, ort, inputBuffers) {
-  var { data } = imageData;
-  var width = tile.inputWidth;
-  var height = tile.inputHeight;
-  var planeSize = height * width;
-  var inLen = 3 * planeSize;
-  var bufferKey = width + 'x' + height;
-  var inputData = inputBuffers.get(bufferKey);
-  if (!inputData) {
-    inputData = new Float32Array(inLen);
-    inputBuffers.set(bufferKey, inputData);
-  }
-  var inverse255 = 1 / 255;
-  for (let y = 0; y < height; y++) {
-    var sourceY = tile.coreY - tile.padding + y;
-    if (sourceY < 0) sourceY = 0;
-    else if (sourceY >= imageData.height) sourceY = imageData.height - 1;
+  var { data, width, height } = imageData;
+  var inLen = 3 * height * width;
+  var inputData = new Float32Array(inLen);
+  for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
-      var sourceX = tile.coreX - tile.padding + x;
-      if (sourceX < 0) sourceX = 0;
-      else if (sourceX >= imageData.width) sourceX = imageData.width - 1;
-      var si = (sourceY * imageData.width + sourceX) * 4;
-      var pixel = y * width + x;
-      inputData[pixel] = data[si] * inverse255;
-      inputData[planeSize + pixel] = data[si + 1] * inverse255;
-      inputData[planeSize * 2 + pixel] = data[si + 2] * inverse255;
+      var si = (y * width + x) * 4;
+      var yv = (0.299 * data[si] + 0.587 * data[si + 1] + 0.114 * data[si + 2]) / 255;
+      for (let c = 0; c < 3; c++)
+        inputData[c * height * width + y * width + x] = yv;
     }
-  }
+  var ort = await loadOrt();
   var t = new ort.Tensor('float32', inputData, [1, 3, height, width]);
   var inputName = session.inputNames?.[0] || 'Input1';
   var outputName = session.outputNames?.[0] || 'output';
   var r = await session.run({ [inputName]: t });
-  return r[outputName] || Object.values(r)[0];
-}
-
-function modelByte(value) {
-  var scaled = value * 255;
-  return scaled <= 0 ? 0 : scaled >= 255 ? 255 : Math.round(scaled);
-}
-
-function copyModelTile(modelOutput, imageData, outputData, outputWidth, tile, opaque) {
-  var modelWidth = modelOutput.dims[3];
-  var modelPixels = modelOutput.dims[2] * modelWidth;
-  var copyWidth = tile.coreWidth * 2;
-  var copyHeight = tile.coreHeight * 2;
-  for (let y = 0; y < copyHeight; y++) {
-    var modelRow = y * modelWidth;
-    var destination = ((tile.coreY * 2 + y) * outputWidth + tile.coreX * 2) * 4;
-    var sourceY = tile.coreY + (y >> 1);
-    for (let x = 0; x < copyWidth; x++) {
-      var modelPixel = modelRow + x;
-      outputData[destination] = modelByte(modelOutput.data[modelPixel]);
-      outputData[destination + 1] = modelByte(modelOutput.data[modelPixels + modelPixel]);
-      outputData[destination + 2] = modelByte(modelOutput.data[modelPixels * 2 + modelPixel]);
-      outputData[destination + 3] = opaque
-        ? 255
-        : imageData.data[(sourceY * imageData.width + tile.coreX + (x >> 1)) * 4 + 3];
-      destination += 4;
+  var o = r[outputName] || Object.values(r)[0]; var oh = o.dims[2], ow = o.dims[3];
+  var base = upscaleImageData(imageData, ow, oh);
+  var detail = getAiDetailMap(o, ow, oh);
+  var strongDetail = options.detailMode === 'strong';
+  var detailAmount = strongDetail ? 0.9 : 0.45;
+  var detailLimit = strongDetail ? 34 : 18;
+  var ratioMin = strongDetail ? 0.78 : 0.88;
+  var ratioMax = strongDetail ? 1.28 : 1.14;
+  var out = new Uint8ClampedArray(oh * ow * 4);
+  for (let y = 0; y < oh; y++)
+    for (let x = 0; x < ow; x++) {
+      var di = (y * ow + x) * 4;
+      var pixel = y * ow + x;
+      var baseR = base.data[di], baseG = base.data[di + 1], baseB = base.data[di + 2];
+      var baseY = Math.max(1, 0.299 * baseR + 0.587 * baseG + 0.114 * baseB);
+      var targetY = baseY + Math.max(-detailLimit, Math.min(detailLimit, detail[pixel] * detailAmount));
+      var ratio = Math.max(ratioMin, Math.min(ratioMax, targetY / baseY));
+      out[di] = clampByte(baseR * ratio);
+      out[di + 1] = clampByte(baseG * ratio);
+      out[di + 2] = clampByte(baseB * ratio);
+      out[di + 3] = base.data[di + 3];
     }
+  return new ImageData(out, ow, oh);
+}
+
+function tensorByte(value) {
+  return clampByte(value * 255);
+}
+
+function clampByte(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function getAiDetailMap(output, width, height) {
+  var count = width * height;
+  var luma = new Float32Array(count);
+  var blur = new Float32Array(count);
+  var detail = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    var aiR = tensorByte(output.data[i]);
+    var aiG = tensorByte(output.data[count + i]);
+    var aiB = tensorByte(output.data[count * 2 + i]);
+    luma[i] = 0.299 * aiR + 0.587 * aiG + 0.114 * aiB;
   }
+
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      var sum = 0;
+      var weight = 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          var sx = Math.max(0, Math.min(width - 1, x + dx));
+          var sy = Math.max(0, Math.min(height - 1, y + dy));
+          var w = dx === 0 && dy === 0 ? 4 : 1;
+          sum += luma[sy * width + sx] * w;
+          weight += w;
+        }
+      blur[y * width + x] = sum / weight;
+    }
+
+  for (let i = 0; i < count; i++) detail[i] = luma[i] - blur[i];
+
+  return detail;
+}
+
+function upscaleImageData(imageData, width, height) {
+  var src = document.createElement('canvas');
+  src.width = imageData.width;
+  src.height = imageData.height;
+  src.getContext('2d').putImageData(imageData, 0, 0);
+  var dst = document.createElement('canvas');
+  dst.width = width;
+  dst.height = height;
+  var ctx = dst.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, width, height);
+  return ctx.getImageData(0, 0, width, height);
 }
 async function runServer(imageData, scale) {
   var c = document.createElement('canvas');
