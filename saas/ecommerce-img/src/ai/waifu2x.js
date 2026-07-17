@@ -19,12 +19,23 @@ function isMobileDevice() {
     || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
 }
 
+function isAppleMobileDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+}
+
 function configureWasm(ort) {
   var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
   var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
   var canUseThreads = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
   var mobileDevice = isMobileDevice();
-  var threadLimit = !mobileDevice && deviceMemory >= 8 && hardwareThreads >= 8 ? 4 : 2;
+  var appleMobile = isAppleMobileDevice();
+  var threadLimit = appleMobile
+    ? 1
+    : !mobileDevice && deviceMemory >= 8 && hardwareThreads >= 8
+      ? 4
+      : 2;
   ort.env.wasm.numThreads = canUseThreads && !(deviceMemory > 0 && deviceMemory <= 4)
     ? Math.max(1, Math.min(threadLimit, hardwareThreads || 1))
     : 1;
