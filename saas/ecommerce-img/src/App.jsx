@@ -1,11 +1,8 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
-import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy } from 'lucide-react'
+import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, Crop, Copy } from 'lucide-react'
 import JSZip from 'jszip'
 import { loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
-import FormatConverter from './tools/FormatConverter'
-import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
-import BackgroundTool from './tools/BackgroundTool'
 import { trackEvent } from './tools/shared'
 
 const QUALITY_PRESETS = [
@@ -13,13 +10,6 @@ const QUALITY_PRESETS = [
   { edge: 2560, label: '2K级', desc: '最长边 2560px' },
   { edge: 3840, label: '4K级', desc: '最长边 3840px' },
   { edge: 7680, label: '8K级', desc: '最长边 7680px' },
-]
-
-const TOOL_NAV = [
-  { id: 'upscale', label: '图片放大', path: '/' },
-  { id: 'converter', label: '图片压缩', path: '/format-converter' },
-  { id: 'product-image', label: '商品图规范化', path: '/product-image' },
-  { id: 'contact', label: '反馈联系', path: '/contact' },
 ]
 
 const CROP_PRESETS = [
@@ -47,6 +37,9 @@ const WARN_OUTPUT_PIXELS = 45_000_000
 const MAX_OUTPUT_PIXELS = 80_000_000
 const MAX_AI_INPUT_EDGE = 2048
 const MAX_AI_INPUT_PIXELS = 4_200_000
+const MOBILE_MAX_OUTPUT_PIXELS = 24_000_000
+const MOBILE_MAX_AI_INPUT_PIXELS = 4_000_000
+const MOBILE_BREAKPOINT = 767
 const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
 const revokeObjectUrl = (url) => {
@@ -144,51 +137,27 @@ const resizeCropRect = (rect, dx, dy, ratio = null) => {
   }
 }
 
-const PAGE_META = {
-  '/': {
-    title: '免费图片放大与批量处理工具 - 本地处理不上传 | TU Scale',
-    description: 'TU Scale 是免费在线图片放大工具，支持单图/批量放大、裁切比例、图片清晰化和图片压缩。图片在浏览器本地处理，不上传服务器，无需登录。',
-  },
-  '/format-converter': {
-    title: '免费图片压缩与尺寸处理 - 批量压缩/证件照预设 | TU Scale',
-    description: 'TU Scale 免费图片压缩工具，支持批量压缩、目标 KB、尺寸预设、自定义裁切和证件照参考线。图片本地处理，不上传服务器。',
-  },
-  '/product-image': {
-    title: '商品图规范化与白底图测试 - TU Scale',
-    description: 'TU Scale 商品图规范化测试工具，支持白底图、平台尺寸、留白和高质量 API 抠图意愿测试。',
-  },
-  '/contact': {
-    title: '反馈与联系 - TU Scale 本地图片工具箱',
-    description: '向 TU Scale 提交功能建议、问题反馈、格式支持请求、批量图片处理需求或合作意向。',
-  },
-}
-
  function App() {
-  const [route, setRoute] = useState(() => window.location.pathname)
+  const [isMobileLayout, setIsMobileLayout] = useState(() => window.innerWidth <= MOBILE_BREAKPOINT)
 
-  const navigate = useCallback((path) => {
-    window.history.pushState({}, '', path)
-    setRoute(path)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+  useEffect(() => {
+    const media = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`)
+    const updateMobileLayout = () => setIsMobileLayout(media.matches)
+    updateMobileLayout()
+    media.addEventListener?.('change', updateMobileLayout)
+    return () => media.removeEventListener?.('change', updateMobileLayout)
   }, [])
 
   useEffect(() => {
-    const onPopState = () => setRoute(window.location.pathname)
-    window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
-  }, [])
-
-  useEffect(() => {
-    const meta = PAGE_META[route] || PAGE_META['/']
-    document.title = meta.title
+    document.title = '免费 AI 图片放大工具 - 本地处理不上传 | TU Scale'
     let description = document.querySelector('meta[name="description"]')
     if (!description) {
       description = document.createElement('meta')
       description.setAttribute('name', 'description')
       document.head.appendChild(description)
     }
-    description.setAttribute('content', meta.description)
-  }, [route])
+    description.setAttribute('content', 'TU Scale 是完全在浏览器本地运行的 AI 图片放大工具，支持保色 AI 放大、智能锐化和抗锯齿，图片绝不上传服务器。')
+  }, [])
 
   // --- 单图模式状态 ---
   const [file, setFile] = useState(null)
@@ -207,7 +176,7 @@ const PAGE_META = {
   const [smartSharpen, setSmartSharpen] = useState(true)
   const [sharpenAmount, setSharpenAmount] = useState(1.2)
   const [aiUpscale, setAiUpscale] = useState(false)
-  const [aiDetailMode, setAiDetailMode] = useState('preserve')
+  const [aiDetailMode] = useState('preserve')
   const [reduceArtifacts, setReduceArtifacts] = useState(false)
   const [reduceMoire, setReduceMoire] = useState(false)
   const [faceAwareProtection, setFaceAwareProtection] = useState(true)
@@ -231,6 +200,7 @@ const PAGE_META = {
     const [progress, setProgress] = useState(0)
     const [processStage, setProcessStage] = useState('')
   const [result, setResult] = useState(null)
+  const [resultBlob, setResultBlob] = useState(null)
     const [resultDims, setResultDims] = useState(null)
   const [resultSize, setResultSize] = useState(null)
   const [compareSource, setCompareSource] = useState(null)
@@ -240,6 +210,9 @@ const PAGE_META = {
   const [showModal, setShowModal] = useState(false)
   const [modalMode, setModalMode] = useState('compare')
   const [compareZoom, setCompareZoom] = useState(1)
+  const [showOriginalOnPress, setShowOriginalOnPress] = useState(false)
+  const [comparePan, setComparePan] = useState({ x: 0, y: 0 })
+  const compareGestureRef = useRef(null)
   const [, setImgZoom] = useState(1)
   const [, setImgPan] = useState({ x: 0, y: 0 })
   const [shareNotice, setShareNotice] = useState('')
@@ -383,7 +356,6 @@ const zipDownloadLockRef = useRef(false)
         if (s.smartSharpen !== undefined) setSmartSharpen(s.smartSharpen)
         if (s.sharpenAmount !== undefined) setSharpenAmount(s.sharpenAmount)
         if (s.aiUpscale !== undefined) setAiUpscale(s.aiUpscale)
-        if (s.aiDetailMode === 'strong' || s.aiDetailMode === 'preserve') setAiDetailMode(s.aiDetailMode)
         if (s.reduceArtifacts !== undefined) setReduceArtifacts(s.reduceArtifacts)
         if (s.reduceMoire !== undefined) setReduceMoire(s.reduceMoire)
         if (s.faceAwareProtection !== undefined) setFaceAwareProtection(s.faceAwareProtection)
@@ -407,6 +379,31 @@ const zipDownloadLockRef = useRef(false)
     }
   }, [])
 
+  // 手机网页固定使用安全的单图设置，避免桌面端保存的高负载参数在隐藏后继续生效。
+  useEffect(() => {
+    if (!isMobileLayout) return
+    setBatchMode(false)
+    setBatchItems(prev => {
+      revokeBatchResultUrls(prev)
+      return []
+    })
+    setScaleMode('scale')
+    setScale(2)
+    setCropEnabled(false)
+    setKeepRatio(true)
+    setSmartSharpen(true)
+    setSharpenAmount(1.2)
+    setReduceArtifacts(false)
+    setReduceMoire(false)
+    setFaceAwareProtection(false)
+    setDeblur(false)
+    setAutoLevels(false)
+    setVibrance(false)
+    setSmartDenoise(false)
+    setEdgeInterpolation(false)
+    setAntiAlias(false)
+  }, [isMobileLayout])
+
   // --- 保存设置到 localStorage ---
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -419,6 +416,9 @@ const zipDownloadLockRef = useRef(false)
   useEffect(() => {
     singleExportIdRef.current = ''
     setResult(null)
+    setResultBlob(null)
+    setComparePan({ x: 0, y: 0 })
+    setShowOriginalOnPress(false)
     setResultDims(null)
     setResultSize(null)
     setCompareSource(prev => {
@@ -821,19 +821,30 @@ const zipDownloadLockRef = useRef(false)
       const inputEdge = Math.max(estimateSourceDims.w, estimateSourceDims.h)
       const warnings = []
       let blockReason = ''
+      const maxOutputPixels = isMobileLayout ? MOBILE_MAX_OUTPUT_PIXELS : MAX_OUTPUT_PIXELS
+      const warnOutputPixels = isMobileLayout ? 18_000_000 : WARN_OUTPUT_PIXELS
+      const maxAiInputPixels = isMobileLayout ? MOBILE_MAX_AI_INPUT_PIXELS : MAX_AI_INPUT_PIXELS
 
-      if (outputPixels > MAX_OUTPUT_PIXELS) {
-        blockReason = `输出预计 ${formatMegapixels(outputPixels)}，浏览器端处理风险太高。请降低倍数或分辨率。`
-      } else if (outputPixels > WARN_OUTPUT_PIXELS) {
+      if (outputPixels > maxOutputPixels) {
+        blockReason = isMobileLayout
+          ? `图片太大：2 倍输出预计 ${formatMegapixels(outputPixels)}，手机浏览器可能卡顿或退出。建议使用电脑端处理。`
+          : `输出预计 ${formatMegapixels(outputPixels)}，浏览器端处理风险太高。请降低倍数或分辨率。`
+      } else if (outputPixels > warnOutputPixels) {
         warnings.push(`输出预计 ${formatMegapixels(outputPixels)}，处理会更慢，也会占用更多内存。`)
       }
 
-      if (aiUpscale && (inputEdge > MAX_AI_INPUT_EDGE || inputPixels > MAX_AI_INPUT_PIXELS)) {
-        blockReason = `AI 模式建议输入长边不超过 ${MAX_AI_INPUT_EDGE}px。请降低尺寸或关闭 AI 放大。`
+      const aiInputTooLarge = isMobileLayout
+        ? inputPixels > maxAiInputPixels
+        : inputEdge > MAX_AI_INPUT_EDGE || inputPixels > maxAiInputPixels
+
+      if (aiUpscale && aiInputTooLarge) {
+        blockReason = isMobileLayout
+          ? `AI 模式支持约 400 万像素以内的图片。当前图片为 ${formatMegapixels(inputPixels)}，建议关闭 AI 或使用电脑端。`
+          : `AI 模式建议输入长边不超过 ${MAX_AI_INPUT_EDGE}px。请降低尺寸或关闭 AI 放大。`
       }
 
       return { outputPixels, inputPixels, inputEdge, warnings, blockReason }
-    }, [origDims, expectedOutput, aiUpscale, cropEnabled, cropRect])
+    }, [origDims, expectedOutput, aiUpscale, cropEnabled, cropRect, isMobileLayout])
 
   const sourceDimsForPreview = useMemo(() => (
     getSourceDims(origDims, cropEnabled, cropRect)
@@ -902,6 +913,50 @@ const zipDownloadLockRef = useRef(false)
   }
 
   // --- Canvas 放大处理（单图和批量共用）---
+  const processCanvasInTiles = async (sourceCanvas, processor, stageLabel, onStage = null, overlap = 2) => {
+    const deviceMemory = Number(navigator.deviceMemory) || 0
+    const lowMemoryDevice = deviceMemory > 0 && deviceMemory <= 4
+    const tileSize = isMobileLayout ? (deviceMemory >= 8 ? 512 : 384) : 640
+    const yieldEvery = lowMemoryDevice ? 2 : 4
+    const output = document.createElement('canvas')
+    output.width = sourceCanvas.width
+    output.height = sourceCanvas.height
+    const sourceCtx = sourceCanvas.getContext('2d')
+    const outputCtx = output.getContext('2d')
+    const columns = Math.ceil(sourceCanvas.width / tileSize)
+    const rows = Math.ceil(sourceCanvas.height / tileSize)
+    const total = columns * rows
+    let completed = 0
+
+    for (let coreY = 0; coreY < sourceCanvas.height; coreY += tileSize) {
+      for (let coreX = 0; coreX < sourceCanvas.width; coreX += tileSize) {
+        const coreWidth = Math.min(tileSize, sourceCanvas.width - coreX)
+        const coreHeight = Math.min(tileSize, sourceCanvas.height - coreY)
+        const inputX = Math.max(0, coreX - overlap)
+        const inputY = Math.max(0, coreY - overlap)
+        const inputRight = Math.min(sourceCanvas.width, coreX + coreWidth + overlap)
+        const inputBottom = Math.min(sourceCanvas.height, coreY + coreHeight + overlap)
+        const input = sourceCtx.getImageData(inputX, inputY, inputRight - inputX, inputBottom - inputY)
+        const processed = processor(input)
+        outputCtx.putImageData(
+          processed,
+          inputX,
+          inputY,
+          coreX - inputX,
+          coreY - inputY,
+          coreWidth,
+          coreHeight,
+        )
+        completed += 1
+        onStage?.(`${stageLabel} ${completed}/${total}`)
+        if (completed % yieldEvery === 0 || completed === total) {
+          await new Promise(resolve => requestAnimationFrame(resolve))
+        }
+      }
+    }
+    return output
+  }
+
   const processImageWithCanvas = (imageUrl, targetW, targetH, doEnhance, fmt, cropOptions = null, onStage = null) => {
     return new Promise((resolve, reject) => {
       const img = new Image()
@@ -995,14 +1050,24 @@ const zipDownloadLockRef = useRef(false)
 
           // Pre-sharpen original image before upscaling
           if (doEnhance.smartSharpen && passes > 0) {
-            const preData = srcCtx.getImageData(0, 0, sourceW, sourceH)
-            const preSharp = unsharpMask(preData, sharpenAmount * 0.8)
-            const protectedPreSharp = protectFaceSkinFromSharpening(preData, preSharp, faceSkinMask, doEnhance.faceSkinStrength)
-            const tempPre = document.createElement('canvas')
-            tempPre.width = sourceW
-            tempPre.height = sourceH
-            tempPre.getContext('2d').putImageData(protectedPreSharp, 0, 0)
-            srcCtx.drawImage(tempPre, 0, 0)
+            if (isMobileLayout) {
+              srcCanvas = await processCanvasInTiles(
+                srcCanvas,
+                imageData => unsharpMask(imageData, sharpenAmount * 0.8),
+                '放大前分块锐化',
+                onStage,
+              )
+              srcCtx = srcCanvas.getContext('2d')
+            } else {
+              const preData = srcCtx.getImageData(0, 0, sourceW, sourceH)
+              const preSharp = unsharpMask(preData, sharpenAmount * 0.8)
+              const protectedPreSharp = protectFaceSkinFromSharpening(preData, preSharp, faceSkinMask, doEnhance.faceSkinStrength)
+              const tempPre = document.createElement('canvas')
+              tempPre.width = sourceW
+              tempPre.height = sourceH
+              tempPre.getContext('2d').putImageData(protectedPreSharp, 0, 0)
+              srcCtx.drawImage(tempPre, 0, 0)
+            }
           }
 
           if (doEnhance.aiUpscale) {
@@ -1011,34 +1076,51 @@ const zipDownloadLockRef = useRef(false)
             let aiCanvas = srcCanvas
             for (let i = 0; i < aiPasses; i++) {
               const aiData = aiCanvas.getContext('2d').getImageData(0, 0, aiCanvas.width, aiCanvas.height)
-              const aiResult = await processWithAI(aiData, 2, { detailMode: doEnhance.aiDetailMode || 'preserve' })
+              const aiResult = await processWithAI(aiData, 2, {
+                detailMode: 'preserve',
+                onProgress: ({ completed, total }) => onStage?.(`AI 分块处理 ${completed}/${total}`),
+              })
               aiCanvas = document.createElement('canvas')
               aiCanvas.width = aiResult.width
               aiCanvas.height = aiResult.height
               aiCanvas.getContext('2d').putImageData(aiResult, 0, 0)
             }
-            const dstCanvas = document.createElement('canvas')
-            dstCanvas.width = targetW
-            dstCanvas.height = targetH
-            const dstCtx = dstCanvas.getContext('2d')
-            dstCtx.imageSmoothingEnabled = true
-            dstCtx.imageSmoothingQuality = 'high'
-            dstCtx.drawImage(aiCanvas, 0, 0, targetW, targetH)
-
-            if (doEnhance.smartSharpen) {
-              const imageData = dstCtx.getImageData(0, 0, targetW, targetH)
-              const enhanced = unsharpMask(imageData, sharpenAmount)
-              const protectedEnhanced = protectFaceSkinFromSharpening(imageData, enhanced, faceSkinMask, doEnhance.faceSkinStrength)
-              dstCtx.putImageData(protectedEnhanced, 0, 0)
+            const dstCanvas = aiCanvas.width === targetW && aiCanvas.height === targetH
+              ? aiCanvas
+              : document.createElement('canvas')
+            if (dstCanvas !== aiCanvas) {
+              dstCanvas.width = targetW
+              dstCanvas.height = targetH
             }
-            srcCanvas = dstCanvas
+            const dstCtx = dstCanvas.getContext('2d')
+            if (dstCanvas !== aiCanvas) {
+              dstCtx.imageSmoothingEnabled = true
+              dstCtx.imageSmoothingQuality = 'high'
+              dstCtx.drawImage(aiCanvas, 0, 0, targetW, targetH)
+            }
+
+            if (doEnhance.smartSharpen && (isMobileLayout || targetW * targetH > 12_000_000)) {
+              srcCanvas = await processCanvasInTiles(
+                dstCanvas,
+                imageData => unsharpMask(imageData, sharpenAmount),
+                '分块锐化',
+                onStage,
+              )
+            } else {
+              if (doEnhance.smartSharpen) {
+                const imageData = dstCtx.getImageData(0, 0, targetW, targetH)
+                const enhanced = unsharpMask(imageData, sharpenAmount)
+                dstCtx.putImageData(enhanced, 0, 0)
+              }
+              srcCanvas = dstCanvas
+            }
           } else {
             for (let i = 0; i < passes; i++) {
             const progress = (i + 1) / passes
             const stepW = Math.round(sourceW * Math.pow(targetW / sourceW, progress))
             const stepH = Math.round(sourceH * Math.pow(targetH / sourceH, progress))
 
-            const dstCanvas = document.createElement('canvas')
+            let dstCanvas = document.createElement('canvas')
             dstCanvas.width = stepW
             dstCanvas.height = stepH
             const dstCtx = dstCanvas.getContext('2d')
@@ -1047,7 +1129,14 @@ const zipDownloadLockRef = useRef(false)
 
             dstCtx.drawImage(srcCanvas, 0, 0, stepW, stepH)
 
-            if (doEnhance.smartSharpen || i > 0) {
+            if (doEnhance.smartSharpen && (isMobileLayout || stepW * stepH > 12_000_000)) {
+              dstCanvas = await processCanvasInTiles(
+                dstCanvas,
+                imageData => unsharpMask(imageData, sharpenAmount),
+                '分块锐化',
+                onStage,
+              )
+            } else if (doEnhance.smartSharpen || i > 0) {
               const imageData = dstCtx.getImageData(0, 0, stepW, stepH)
               let enhanced = imageData
               if (doEnhance.smartSharpen) {
@@ -1061,7 +1150,9 @@ const zipDownloadLockRef = useRef(false)
           }
 
           // Apply anti-aliasing as final step
-          if (doEnhance.antiAlias) {
+          if (doEnhance.antiAlias && (isMobileLayout || srcCanvas.width * srcCanvas.height > 12_000_000)) {
+            srcCanvas = await processCanvasInTiles(srcCanvas, antiAliasingFilter, '分块抗锯齿', onStage)
+          } else if (doEnhance.antiAlias) {
             const finalCtx = srcCanvas.getContext('2d')
             const finalData = finalCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height)
             const aaResult = antiAliasingFilter(finalData)
@@ -1088,10 +1179,6 @@ const zipDownloadLockRef = useRef(false)
     const { data, width, height } = imageData
     const luma = new Float32Array(width * height)
     const blurred = new Float32Array(width * height)
-    const gaussKernel = [2, 4, 2, 4, 8, 4, 2, 4, 2]
-    let kernelSum = 0
-    for (const v of gaussKernel) kernelSum += v
-
     for (let i = 0, p = 0; i < data.length; i += 4, p++) {
       luma[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
       blurred[p] = luma[p]
@@ -1099,12 +1186,21 @@ const zipDownloadLockRef = useRef(false)
 
     // Gaussian blur on luminance only, so sharpening cannot shift hue/saturation.
     for (let y = 1; y < height - 1; y++) {
+      const previousRow = (y - 1) * width
+      const currentRow = y * width
+      const nextRow = (y + 1) * width
       for (let x = 1; x < width - 1; x++) {
         let sum = 0
-        for (let ky = -1; ky <= 1; ky++)
-          for (let kx = -1; kx <= 1; kx++)
-            sum += luma[(y + ky) * width + (x + kx)] * gaussKernel[(ky + 1) * 3 + (kx + 1)]
-        blurred[y * width + x] = sum / kernelSum
+        sum += luma[previousRow + x - 1] * 2
+        sum += luma[previousRow + x] * 4
+        sum += luma[previousRow + x + 1] * 2
+        sum += luma[currentRow + x - 1] * 4
+        sum += luma[currentRow + x] * 8
+        sum += luma[currentRow + x + 1] * 4
+        sum += luma[nextRow + x - 1] * 2
+        sum += luma[nextRow + x] * 4
+        sum += luma[nextRow + x + 1] * 2
+        blurred[currentRow + x] = sum / 32
       }
     }
 
@@ -1225,7 +1321,7 @@ const zipDownloadLockRef = useRef(false)
             }
           }
         }
-        output[idx + 3] = 255
+        output[idx + 3] = data[idx + 3]
       }
     }
     return new ImageData(output, width, height)
@@ -1404,11 +1500,27 @@ const zipDownloadLockRef = useRef(false)
           return compareRes.dataUrl
         })
         setCompareSourceDims({ w: compareRes.width, h: compareRes.height })
-        const res = await processImageWithCanvas(preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, setProcessStage)
+        const res = await processImageWithCanvas(preview, targetW, targetH, {
+          smartSharpen,
+          aiUpscale,
+          aiDetailMode: 'preserve',
+          reduceArtifacts: false,
+          reduceMoire: false,
+          faceAwareProtection: false,
+          faceSkinStrength: 0,
+          deblur: false,
+          autoLevels: false,
+          vibrance: false,
+          clahe: false,
+          smartDenoise: false,
+          edgeInterpolation: false,
+          antiAlias,
+        }, format, cropOptions, setProcessStage)
         setProgress(95)
         setProcessStage('导出结果')
         await new Promise(r => setTimeout(r, 100))
         setResult(res.dataUrl)
+        setResultBlob(res.blob)
       setResultDims({ w: res.width, h: res.height })
       const sizeKB = res.size < 1024 * 1024
         ? (res.size / 1024).toFixed(1) + ' KB'
@@ -1438,7 +1550,7 @@ const zipDownloadLockRef = useRef(false)
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, isMobileLayout, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -1488,7 +1600,22 @@ const zipDownloadLockRef = useRef(false)
           await ensureAiModel()
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
           const updateItemStage = (stage) => setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage } : it))
-          const res = await processImageWithCanvas(item.preview, targetW, targetH, { smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, updateItemStage)
+          const res = await processImageWithCanvas(item.preview, targetW, targetH, {
+            smartSharpen,
+            aiUpscale,
+            aiDetailMode: 'preserve',
+            reduceArtifacts: false,
+            reduceMoire: false,
+            faceAwareProtection: false,
+            faceSkinStrength: 0,
+            deblur: false,
+            autoLevels: false,
+            vibrance: false,
+            clahe: false,
+            smartDenoise: false,
+            edgeInterpolation: false,
+            antiAlias,
+          }, format, cropOptions, updateItemStage)
         clearInterval(timer)
 
         const sizeKB = res.size < 1024 * 1024
@@ -1542,6 +1669,26 @@ const zipDownloadLockRef = useRef(false)
     singleExportIdRef.current = exportId
     trackEvent('download_success', { mode: 'single', format })
     trackEvent('exported_image', { mode: 'single', format, count: 1, eventId: `e_${exportId}-image` })
+  }
+
+  const handleSaveToPhotos = async () => {
+    if (!result || !resultBlob) return handleDownload()
+    const ext = format === 'jpeg' ? 'jpg' : format === 'webp' ? 'webp' : 'png'
+    const name = file ? file.name.replace(/\.[^.]+$/, '') : 'image'
+    const fileName = `${name}_${resultDims ? `${resultDims.w}x${resultDims.h}` : 'result'}.${ext}`
+    const imageFile = new File([resultBlob], fileName, { type: resultBlob.type || `image/${format}` })
+
+    try {
+      const shareData = { files: [imageFile], title: '保存 TU Scale 图片' }
+      if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
+        await navigator.share(shareData)
+        trackEvent('download_success', { mode: 'mobile_share', format })
+        return
+      }
+    } catch (shareError) {
+      if (shareError?.name === 'AbortError') return
+    }
+    handleDownload()
   }
 
   // --- 渲染文件名模板 ---
@@ -1644,64 +1791,45 @@ const zipDownloadLockRef = useRef(false)
     setTimeout(() => setShareNotice(''), 2200)
   }, [])
 
-  if (route === '/format-converter') return <FormatConverter navigate={navigate} />
-  if (route === '/product-image') return <BackgroundTool navigate={navigate} />
-  if (route === '/contact') return <ContactPage navigate={navigate} />
-
  return (
     <div className="min-h-screen bg-gray-50/80">
-      <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 sticky top-0 z-10 shadow-sm">
+      <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-4 sm:px-6 py-2 sm:py-3 sticky top-0 z-10 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center gap-4">
-          <img src="/logo.png" alt="TU Scale" className="h-16 sm:h-18 w-auto shrink-0" />
+          <img src="/logo.png" alt="TU Scale" className="h-12 sm:h-16 w-auto shrink-0" />
           <div className="flex flex-col min-w-0 mr-auto justify-center">
-            <h1 className="text-lg sm:text-xl font-bold tracking-tight truncate leading-tight" style={{ color: '#8040f0' }}>TU Scale 本地图片工具箱-图片放大工具</h1>
-            <p className="mt-2 text-xs sm:text-sm font-semibold text-gray-400 leading-none">图片本地处理，不上传服务器</p>
+            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate leading-tight" style={{ color: '#8040f0' }}>TU Scale AI 图片放大</h1>
+            <p className="mt-1.5 text-[11px] sm:text-sm font-semibold text-gray-400 leading-none">完全本地处理，图片绝不上传</p>
           </div>
-          <nav className="hidden md:flex items-center gap-1 overflow-x-auto">
-            {TOOL_NAV.map(item => (
-              <button key={item.id} onClick={() => navigate(item.path)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${item.id === 'upscale' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'text-gray-500 hover:bg-gray-50 border border-transparent'}`}>
-                {item.label}
-              </button>
-            ))}
-          </nav>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-6 pb-24 space-y-6">
-
-        <div className="flex md:hidden items-center gap-1 overflow-x-auto">
-          {TOOL_NAV.map(item => (
-            <button key={item.id} onClick={() => navigate(item.path)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border whitespace-nowrap ${item.id === 'upscale' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'text-gray-500 border-gray-200 bg-white'}`}>
-              {item.label}
-            </button>
-          ))}
-        </div>
+      <main className="max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-24 space-y-4 sm:space-y-6">
 
         <div className="flex sm:hidden flex-wrap gap-2">
-          {['免费使用', '本地处理', '图片不上传', '支持批量', '图片压缩'].map(item => (
+          {['免费使用', '本地处理', '图片不上传', '单张处理'].map(item => (
             <span key={item} className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-xs font-semibold text-gray-500 shadow-sm">{item}</span>
           ))}
         </div>
 
         <section className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
-          <p className="text-sm font-semibold text-indigo-800">新用户推荐从 2 倍开始，上传后保持默认设置即可处理</p>
-          <p className="mt-1 text-xs leading-5 text-indigo-600">适合头像、照片、插画和网页配图；图片默认在浏览器本地处理。</p>
+          <p className="text-sm font-semibold text-indigo-800">{isMobileLayout ? '手机版默认 2 倍放大，上传一张图片即可开始' : '新用户推荐从 2 倍开始，上传后保持默认设置即可处理'}</p>
+          <p className="mt-1 text-xs leading-5 text-indigo-600">适合头像、照片、插画和网页配图；图片只在当前设备处理，不会上传服务器。</p>
         </section>
 
-        <section className="bg-white border border-gray-200 rounded-xl p-3">
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => setToolMode(false)}
-              className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${!batchMode ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-              单图处理
-            </button>
-            <button onClick={() => setToolMode(true)}
-              className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${batchMode ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-              批量处理
-            </button>
-          </div>
-        </section>
+        {!isMobileLayout && (
+          <section className="bg-white border border-gray-200 rounded-xl p-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => setToolMode(false)}
+                className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${!batchMode ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                单图处理
+              </button>
+              <button onClick={() => setToolMode(true)}
+                className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${batchMode ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                批量处理
+              </button>
+            </div>
+          </section>
+        )}
 
         {/* ==================== 上传区 ==================== */}
         <section
@@ -1724,7 +1852,7 @@ const zipDownloadLockRef = useRef(false)
           onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
         >
-          <input ref={fileRef} type="file" accept="image/*,.avif,.heic,.heif" multiple={batchMode} className="hidden"
+          <input ref={fileRef} type="file" accept="image/*,.avif,.heic,.heif" multiple={batchMode && !isMobileLayout} className="hidden"
             onChange={handleFileInputChange} />
           <input ref={folderRef} type="file" className="hidden"
             onChange={handleFolderUpload} />
@@ -1870,7 +1998,7 @@ const zipDownloadLockRef = useRef(false)
         )}
 
         {/* ==================== 裁切适配 ==================== */}
-        <section className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+        {!isMobileLayout && <section className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="font-semibold text-gray-800 text-sm flex items-center gap-2">
@@ -1949,10 +2077,105 @@ const zipDownloadLockRef = useRef(false)
               )}
             </>
           )}
-        </section>
+        </section>}
 
         {/* ==================== 控制区 ==================== */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 space-y-4">
+          {isMobileLayout ? (
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-indigo-800">手机精简模式</h2>
+                  <p className="mt-1 text-xs leading-5 text-indigo-600">固定 2 倍放大并自动清晰化，减少手机内存占用。</p>
+                </div>
+                <span className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-indigo-700 shadow-sm">2x</span>
+              </div>
+
+              <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 select-none ${
+                aiUpscale ? 'border-indigo-300 bg-indigo-50/50' : 'border-gray-200 bg-gray-50/60'
+              }`}>
+                <input type="checkbox" checked={aiUpscale}
+                  onChange={(event) => {
+                    const enabled = event.target.checked
+                    setAiUpscale(enabled)
+                    if (enabled) trackEvent('ai_enabled', { source: 'mobile' })
+                  }}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600" />
+                <span>
+                  <strong className="block text-sm font-semibold text-gray-800">AI 放大（保持原图颜色）</strong>
+                  <span className="mt-1 block text-xs leading-5 text-gray-500">AI 只增强亮度细节，不调整色相和饱和度；分块处理支持约 400 万像素以内图片。</span>
+                </span>
+              </label>
+              {aiUpscale && (
+                <p className={`-mt-2 rounded-lg px-3 py-2 text-xs ${aiModelReady ? 'bg-green-50 text-green-700' : aiModelLoading ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
+                  {aiModelReady
+                    ? 'AI 模型已下载并在本机启用'
+                    : aiModelLoading
+                      ? '正在下载并启动 AI 模型…'
+                      : 'AI 模型尚未加载成功，处理时会自动重试'}
+                </p>
+              )}
+
+              <div className={`rounded-xl border px-4 py-3 ${smartSharpen ? 'border-indigo-200 bg-white' : 'border-gray-200 bg-gray-50/60'}`}>
+                <label className="flex items-center gap-3 select-none">
+                  <input type="checkbox" checked={smartSharpen}
+                    onChange={(event) => setSmartSharpen(event.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-indigo-600" />
+                  <span className="text-sm font-semibold text-gray-800">智能锐化</span>
+                  <span className="ml-auto text-xs font-semibold text-indigo-600">{sharpenAmount.toFixed(1)}</span>
+                </label>
+                {smartSharpen && (
+                  <div className="mt-3">
+                    <input type="range" min="0.3" max="2" step="0.1" value={sharpenAmount}
+                      aria-label="智能锐化强度"
+                      onChange={(event) => setSharpenAmount(Number(event.target.value))}
+                      className="h-2 w-full accent-indigo-600" />
+                    <div className="mt-1 flex justify-between text-[10px] text-gray-400"><span>自然</span><span>更清晰</span></div>
+                  </div>
+                )}
+              </div>
+
+              <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 select-none ${antiAlias ? 'border-indigo-200 bg-white' : 'border-gray-200 bg-gray-50/60'}`}>
+                <input type="checkbox" checked={antiAlias}
+                  onChange={(event) => setAntiAlias(event.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-indigo-600" />
+                <span>
+                  <strong className="block text-sm font-semibold text-gray-800">抗锯齿</strong>
+                  <span className="mt-1 block text-xs leading-5 text-gray-500">减轻文字、插画和斜线边缘的锯齿感。</span>
+                </span>
+              </label>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-gray-500">导出格式</span>
+                <div className="flex gap-1">
+                  {FORMAT_OPTIONS.map((opt) => (
+                    <button key={opt.value} type="button" onClick={() => setFormat(opt.value)}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                        format === opt.value
+                          ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+                          : 'border-gray-200 bg-white text-gray-500'
+                      }`}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {expectedOutput && (
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-700">
+                  预计导出 <strong>{expectedOutput.w}&times;{expectedOutput.h}px</strong>
+                </div>
+              )}
+
+              {processEstimate?.blockReason && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
+                  <strong className="block text-sm">图片太大，建议使用电脑端</strong>
+                  <span className="mt-1 block">{processEstimate.blockReason}</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
           {/* 模式切换 */}
           <div className="flex gap-2">
             {[{ value: 'scale', label: '\u6309\u500d\u6570\u653e\u5927', icon: ZoomIn },
@@ -2135,7 +2358,7 @@ const zipDownloadLockRef = useRef(false)
                 )}
               </div>
 
-              <div className="border-t border-gray-100 pt-3">
+              <div className="hidden">
                 <div className="text-xs font-medium text-gray-500 mb-2">放大前净化</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
@@ -2180,7 +2403,7 @@ const zipDownloadLockRef = useRef(false)
                 )}
               </div>
 
-              <div className="border-t border-gray-100 pt-3">
+              <div className="hidden">
                 <div className='text-xs font-medium text-gray-500 mb-2'>{'\u8272\u5f69/\u5bf9\u6bd4\u5ea6'}</div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
@@ -2210,8 +2433,7 @@ const zipDownloadLockRef = useRef(false)
                         if (enabled) trackEvent('ai_enabled')
                       }}
                       className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
-                    AI{'\u653e\u5927'}
-                    <span className="text-[9px] text-gray-300 ml-0.5">(beta)</span>
+                    AI 放大（保持原图颜色）
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                     <input type="checkbox" checked={antiAlias}
@@ -2222,17 +2444,6 @@ const zipDownloadLockRef = useRef(false)
                 </div>
                   {aiUpscale && (
                     <div className="mt-2 space-y-2">
-                      <div className="inline-grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-white p-1">
-                        {[
-                          ['preserve', '保色'],
-                          ['strong', '强细节'],
-                        ].map(([id, label]) => (
-                          <button key={id} type="button" onClick={() => setAiDetailMode(id)}
-                            className={`px-3 py-1.5 rounded-md text-[11px] font-semibold ${aiDetailMode === id ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}>
-                            {label}
-                          </button>
-                        ))}
-                      </div>
                       <p className="text-[11px] leading-5 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
                         {aiModelLoading
                           ? '正在下载并加载浏览器端 AI 模型，首次使用可能需要数秒。'
@@ -2250,6 +2461,8 @@ const zipDownloadLockRef = useRef(false)
                 </div>
             </div>
           </div>
+            </>
+          )}
           {/* 提交按钮 */}
           {!batchMode && (
             <>
@@ -2305,6 +2518,105 @@ const zipDownloadLockRef = useRef(false)
         {/* ==================== 单图 - 前后对比 ==================== */}
         {!batchMode && result && compareDisplaySource && compareDisplayDims && (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            {isMobileLayout ? (
+              <div className="p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800">按住查看原图</h3>
+                    <p className="mt-1 text-xs text-gray-500">按住显示原图并拖动画面，松开显示生成图</p>
+                  </div>
+                  <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${showOriginalOnPress ? 'bg-gray-100 text-gray-700' : 'bg-indigo-50 text-indigo-700'}`}>
+                    {showOriginalOnPress ? '原图' : '生成图'}
+                  </span>
+                </div>
+                <div className="mb-3 flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2">
+                  <span className="shrink-0 text-xs text-gray-500">细节放大</span>
+                  <input type="range" min="1" max="8" step="0.5" value={compareZoom}
+                    aria-label="对比图放大倍数"
+                    onChange={(event) => {
+                      const zoom = Number(event.target.value)
+                      setCompareZoom(zoom)
+                      if (zoom === 1) setComparePan({ x: 0, y: 0 })
+                    }}
+                    className="h-2 min-w-0 flex-1 accent-indigo-600" />
+                  <span className="w-9 text-right text-xs font-semibold tabular-nums text-indigo-600">{compareZoom}x</span>
+                </div>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label="按住查看原图，松开查看生成图"
+                  onContextMenu={(event) => event.preventDefault()}
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.currentTarget.setPointerCapture?.(event.pointerId)
+                    compareGestureRef.current = {
+                      pointerId: event.pointerId,
+                      startX: event.clientX,
+                      startY: event.clientY,
+                      originX: comparePan.x,
+                      originY: comparePan.y,
+                    }
+                    setShowOriginalOnPress(true)
+                  }}
+                  onPointerMove={(event) => {
+                    const gesture = compareGestureRef.current
+                    if (!gesture || gesture.pointerId !== event.pointerId || compareZoom <= 1) return
+                    event.preventDefault()
+                    const maxX = event.currentTarget.clientWidth * (compareZoom - 1) / 2
+                    const maxY = event.currentTarget.clientHeight * (compareZoom - 1) / 2
+                    setComparePan({
+                      x: clamp(gesture.originX + event.clientX - gesture.startX, -maxX, maxX),
+                      y: clamp(gesture.originY + event.clientY - gesture.startY, -maxY, maxY),
+                    })
+                  }}
+                  onPointerUp={(event) => {
+                    event.currentTarget.releasePointerCapture?.(event.pointerId)
+                    compareGestureRef.current = null
+                    setShowOriginalOnPress(false)
+                  }}
+                  onPointerCancel={() => {
+                    compareGestureRef.current = null
+                    setShowOriginalOnPress(false)
+                  }}
+                  onLostPointerCapture={() => {
+                    compareGestureRef.current = null
+                    setShowOriginalOnPress(false)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === ' ' || event.key === 'Enter') {
+                      event.preventDefault()
+                      setShowOriginalOnPress(true)
+                    }
+                  }}
+                  onKeyUp={() => setShowOriginalOnPress(false)}
+                  className="relative select-none overflow-hidden rounded-xl border border-gray-200 bg-gray-100 shadow-inner"
+                  style={{
+                    touchAction: 'none',
+                    WebkitTouchCallout: 'none',
+                    WebkitUserSelect: 'none',
+                    userSelect: 'none',
+                  }}>
+                  <img
+                    src={showOriginalOnPress ? compareDisplaySource : result}
+                    alt={showOriginalOnPress ? compareSourceLabel : '生成图'}
+                    draggable="false"
+                    onDragStart={(event) => event.preventDefault()}
+                    className="pointer-events-none block h-auto max-h-[65vh] w-full select-none object-contain transition-none"
+                    style={{
+                      transform: `translate3d(${comparePan.x}px, ${comparePan.y}px, 0) scale(${compareZoom})`,
+                      transformOrigin: 'center center',
+                      WebkitTouchCallout: 'none',
+                      WebkitUserSelect: 'none',
+                      userSelect: 'none',
+                    }}
+                  />
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-3 pb-3 pt-8 text-center text-xs font-medium text-white">
+                    {showOriginalOnPress ? '正在查看原图 · 拖动查看细节' : '按住图片查看原图'}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
               <h3 className="font-semibold text-gray-800 text-sm flex items-center gap-2">
                 <ImageIcon className="w-4 h-4 text-indigo-500" />
@@ -2351,6 +2663,8 @@ const zipDownloadLockRef = useRef(false)
                 </div>
               </div>
             </div>
+              </>
+            )}
           </div>
         )}
 
@@ -2364,14 +2678,17 @@ const zipDownloadLockRef = useRef(false)
                 <div className="text-gray-400">{(resultDims.w / (compareDisplayDims?.w || origDims.w)).toFixed(1)}x &middot; {resultSize}</div>
               </div>
             </div>
-            <div className="rounded-xl overflow-hidden bg-gray-50 border border-gray-100">
-              <img src={result} alt="\u653e\u5927\u7ed3\u679c" className="w-full h-auto max-h-96 object-contain mx-auto cursor-pointer"
-                onClick={() => { setModalMode('single'); setShowModal(true); setImgZoom(1); setImgPan({x:0,y:0}); }} />
-            </div>
-            <button onClick={handleDownload}
+            {!isMobileLayout && (
+              <div className="rounded-xl overflow-hidden bg-gray-50 border border-gray-100">
+                <img src={result} alt="\u653e\u5927\u7ed3\u679c" className="w-full h-auto max-h-96 object-contain mx-auto cursor-pointer"
+                  onClick={() => { setModalMode('single'); setShowModal(true); setImgZoom(1); setImgPan({x:0,y:0}); }} />
+              </div>
+            )}
+            <button onClick={isMobileLayout ? handleSaveToPhotos : handleDownload}
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
-              <Download className="w-4 h-4" /> 下载 {format === 'jpeg' ? 'JPG' : format.toUpperCase()}
+              <Download className="w-4 h-4" /> {isMobileLayout ? '保存到手机相册' : `下载 ${format === 'jpeg' ? 'JPG' : format.toUpperCase()}`}
             </button>
+            {isMobileLayout && <p className="-mt-2 text-center text-[11px] text-gray-400">将打开系统菜单，请选择“存储图像”或相册应用</p>}
             <p className="text-center text-xs text-gray-500">
               文件名：{file ? file.name.replace(/\.[^.]+$/, '') : 'image'}_{resultDims.w}x{resultDims.h}.{format === 'jpeg' ? 'jpg' : format}
               {format === 'png' ? ' · 保留透明背景' : ' · 不保留透明背景'}
@@ -2381,14 +2698,10 @@ const zipDownloadLockRef = useRef(false)
                 <CheckCircle className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />
                 <div>
                   <p className="text-sm font-semibold text-gray-800">处理完成，可以收藏下次再用</p>
-                  <p className="text-xs leading-5 text-gray-500">下次还可以继续批量放大、裁切比例和图片压缩。</p>
+                  <p className="text-xs leading-5 text-gray-500">图片始终在当前设备处理，不会上传服务器。</p>
                 </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <button onClick={() => navigate('/contact')}
-                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700">
-                  <MessageSquare className="w-3.5 h-3.5" /> 批量或定制处理
-                </button>
                 <button onClick={handleCopyPageLink}
                   className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100">
                   <Copy className="w-3.5 h-3.5" /> 复制页面链接
@@ -2440,10 +2753,6 @@ const zipDownloadLockRef = useRef(false)
                 </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <button onClick={() => navigate('/contact')}
-                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700">
-                  <MessageSquare className="w-3.5 h-3.5" /> 批量或定制处理
-                </button>
                 <button onClick={handleCopyPageLink}
                   className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-700 text-xs font-semibold hover:bg-gray-100">
                   <Copy className="w-3.5 h-3.5" /> 复制页面链接
@@ -2454,40 +2763,8 @@ const zipDownloadLockRef = useRef(false)
           </div>
         )}
 
-        <section className="bg-white border border-gray-200 rounded-xl p-5">
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div>
-              <h2 className="font-semibold text-gray-900 text-sm">更多本地图片工具</h2>
-              <p className="text-xs text-gray-500 mt-1">保留最常用的本地处理工具，图片不上传服务器。</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <button onClick={() => navigate('/format-converter')}
-              className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
-              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-                <FileImage className="w-4 h-4 text-indigo-500" /> 本地图片压缩
-              </div>
-              <p className="text-xs leading-6 text-gray-500 mt-1">批量压缩体积、统一尺寸、裁切范围和证件照预设，支持 ZIP 下载。</p>
-            </button>
-            <button onClick={() => navigate('/product-image')}
-              className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
-              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-                <Sparkles className="w-4 h-4 text-indigo-500" /> 商品图规范化
-              </div>
-              <p className="text-xs leading-6 text-gray-500 mt-1">把商品图整理成平台常用尺寸、白底留白和可下载格式。</p>
-            </button>
-            <button onClick={() => navigate('/contact')}
-              className="text-left border border-gray-200 rounded-xl p-4 hover:border-indigo-200 hover:bg-indigo-50/40 transition-colors">
-              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-                <MessageSquare className="w-4 h-4 text-indigo-500" /> 反馈联系
-              </div>
-              <p className="text-xs leading-6 text-gray-500 mt-1">告诉我你想要的格式、裁切比例或新的图片处理功能。</p>
-            </button>
-          </div>
-        </section>
-
         {/* 说明 */}
-        <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-xs text-blue-800 leading-relaxed">
+        <div className={`${isMobileLayout ? 'hidden' : ''} bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-xs text-blue-800 leading-relaxed`}>
           <ul className="list-disc list-inside space-y-1">
             <li><strong>{'\u591a\u7ea7\u653e\u5927'}</strong>{'\uff1a\u5927\u500d\u6570\u65f6\u81ea\u52a8\u5206\u9636\u6bb5\u653e\u5927\uff0c\u6bcf\u7ea7\u4e2d\u95f4\u505a\u9510\u5316'}</li>
             <li><strong>{'\u589e\u5f3a\u753b\u8d28'}</strong>{'\uff1a\u9ad8\u8d28\u91cf\u91cd\u91c7\u6837 + \u667a\u80fd\u9510\u5316'}</li>
@@ -2499,7 +2776,7 @@ const zipDownloadLockRef = useRef(false)
           </ul>
         </div>
 
-        <section className="space-y-5 text-gray-700">
+        <section className={`${isMobileLayout ? 'hidden' : ''} space-y-5 text-gray-700`}>
           <div className="space-y-2">
             <h2 className="text-lg font-semibold text-gray-900">{'\u514d\u8d39\u5728\u7ebf\u56fe\u7247\u653e\u5927\u5de5\u5177'}</h2>
             <p className="text-sm leading-7">
@@ -2509,7 +2786,7 @@ const zipDownloadLockRef = useRef(false)
               {'\u5de5\u5177\u652f\u6301\u667a\u80fd\u9510\u5316\u3001\u81ea\u52a8\u8272\u9636\u3001\u81ea\u7136\u9971\u548c\u5ea6\u3001\u6297\u952f\u9f7f\u548c AI \u56fe\u7247\u653e\u5927\u3002\u5982\u679c\u9700\u8981\u4e00\u6b21\u5904\u7406\u591a\u5f20\u56fe\u7247\uff0c\u4e5f\u53ef\u4ee5\u4f7f\u7528\u6279\u91cf\u56fe\u7247\u653e\u5927\u6a21\u5f0f\uff0c\u6309\u540c\u4e00\u7ec4\u53c2\u6570\u987a\u5e8f\u751f\u6210\u9ad8\u6e05\u56fe\u7247\u3002'}
             </p>
             <p className="text-sm leading-7">
-              为了保护隐私，TU Scale 默认在浏览器本地完成图片放大、锐化和图片压缩。你选择的图片不会被上传到 TU Scale 服务器，适合处理需要更安心保存的个人照片、头像和普通配图。
+              为了保护隐私，TU Scale 在浏览器本地完成 AI 放大、智能锐化和抗锯齿。你选择的图片不会被上传到 TU Scale 服务器，适合处理需要安心保存的个人照片、头像和普通配图。
             </p>
           </div>
 
