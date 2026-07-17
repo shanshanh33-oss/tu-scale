@@ -28,9 +28,10 @@ function configureWasm(ort) {
   ort.env.wasm.numThreads = canUseThreads && !(deviceMemory > 0 && deviceMemory <= 4)
     ? Math.max(1, Math.min(threadLimit, hardwareThreads || 1))
     : 1;
-  // Run long WASM inference away from the phone UI thread so progress and
-  // touch interactions remain responsive. Model math stays unchanged.
-  ort.env.wasm.proxy = mobileDevice && typeof Worker !== 'undefined';
+  // The packaged ORT proxy worker fails to initialize on some mobile Safari
+  // and Android WebView versions. Small tiles plus frequent browser yields are
+  // more compatible while keeping the exact same model math.
+  ort.env.wasm.proxy = false;
   // Let Vite provide the actual fingerprinted asset URL instead of relying on
   // a build-specific filename that can change after dependency updates.
   ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': wasmRuntimeUrl };
@@ -180,13 +181,11 @@ async function runLocal(imageData, options = {}) {
   var outputData = new Uint8ClampedArray(outputWidth * outputHeight * 4);
   var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
   var mobileDevice = isMobileDevice();
-  // The ORT proxy worker transfers (detaches) input buffers. Reuse is safe on
-  // direct WASM/WebGPU, but proxy inference needs a fresh buffer per tile.
-  var inputBuffers = mobileDevice && modelStatus === 'wasm' ? null : new Map();
+  var inputBuffers = new Map();
   var yieldEvery = deviceMemory > 0 && deviceMemory <= 4
     ? 1
     : mobileDevice
-      ? modelStatus === 'webgpu' ? 4 : 2
+      ? modelStatus === 'webgpu' ? 4 : 1
       : 4;
   var opaque = true;
   for (let alphaIndex = 3; alphaIndex < imageData.data.length; alphaIndex += 4) {
