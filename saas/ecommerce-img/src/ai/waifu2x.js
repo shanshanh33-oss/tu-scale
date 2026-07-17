@@ -4,8 +4,8 @@ import wasmRuntimeUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 const MODEL_PATH = '/models/waifu2x.onnx';
 const SERVER_URL = 'http://localhost:5179';
 const MODEL_PADDING = 7;
-const LOW_MEMORY_TILE_SIZE = 192;
-const MOBILE_TILE_SIZE = 256;
+const LOW_MEMORY_TILE_SIZE = 160;
+const MOBILE_TILE_SIZE = 192;
 const DESKTOP_TILE_SIZE = 384;
 let session = null;
 let runtime = null;
@@ -13,15 +13,24 @@ let useLocalModel = null;
 let loadingPromise = null;
 let modelStatus = 'unloaded';
 
+function isMobileDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+}
+
 function configureWasm(ort) {
   var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
   var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
   var canUseThreads = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
-  var threadLimit = deviceMemory >= 8 && hardwareThreads >= 8 ? 4 : 2;
+  var mobileDevice = isMobileDevice();
+  var threadLimit = !mobileDevice && deviceMemory >= 8 && hardwareThreads >= 8 ? 4 : 2;
   ort.env.wasm.numThreads = canUseThreads && !(deviceMemory > 0 && deviceMemory <= 4)
     ? Math.max(1, Math.min(threadLimit, hardwareThreads || 1))
     : 1;
-  ort.env.wasm.proxy = false;
+  // Run long WASM inference away from the phone UI thread so progress and
+  // touch interactions remain responsive. Model math stays unchanged.
+  ort.env.wasm.proxy = mobileDevice && typeof Worker !== 'undefined';
   // Let Vite provide the actual fingerprinted asset URL instead of relying on
   // a build-specific filename that can change after dependency updates.
   ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': wasmRuntimeUrl };
@@ -36,7 +45,13 @@ async function loadWasmOrt() {
 async function createBrowserSession(buffer) {
   var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
   var lowMemoryDevice = deviceMemory > 0 && deviceMemory <= 4;
-  if (typeof navigator !== 'undefined' && navigator.gpu && !lowMemoryDevice) {
+  var mobileDevice = isMobileDevice();
+  var androidChrome = typeof navigator !== 'undefined'
+    && /Android/i.test(navigator.userAgent)
+    && /Chrome/i.test(navigator.userAgent)
+    && !/EdgA|OPR/i.test(navigator.userAgent);
+  var allowWebGpu = !mobileDevice || (androidChrome && deviceMemory >= 8);
+  if (typeof navigator !== 'undefined' && navigator.gpu && !lowMemoryDevice && allowWebGpu) {
     try {
       var webgpuOrt = await import('onnxruntime-web/webgpu');
       webgpuOrt.env.webgpu.powerPreference = 'high-performance';
@@ -66,7 +81,7 @@ export async function loadModel() {
     modelStatus = 'loading';
 
     // 先试本地服务（开发环境效果最好）
-    var mobileLayout = typeof window !== 'undefined' && window.innerWidth <= 767;
+    var mobileLayout = isMobileDevice();
     try {
       if (mobileLayout) throw new Error('Skip desktop localhost probe on mobile');
       var r = await fetch(SERVER_URL + '/process', { method: 'OPTIONS', signal: AbortSignal.timeout(1500) });
@@ -123,11 +138,9 @@ function getTileSize(options = {}) {
     return Math.max(64, Math.min(512, Math.round(options.tileSize)));
   }
   var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
-  var mobileLayout = typeof window !== 'undefined' && window.innerWidth <= 767;
+  var mobileLayout = isMobileDevice();
   if (deviceMemory > 0 && deviceMemory <= 4) return LOW_MEMORY_TILE_SIZE;
-  if (modelStatus === 'webgpu' && deviceMemory >= 8) return DESKTOP_TILE_SIZE;
-  if (modelStatus === 'webgpu' && deviceMemory === 0 && hardwareThreads >= 8) return 320;
+  if (mobileLayout && modelStatus === 'webgpu') return 256;
   return mobileLayout ? MOBILE_TILE_SIZE : DESKTOP_TILE_SIZE;
 }
 
@@ -165,9 +178,16 @@ async function runLocal(imageData, options = {}) {
   var outputWidth = imageData.width * 2;
   var outputHeight = imageData.height * 2;
   var outputData = new Uint8ClampedArray(outputWidth * outputHeight * 4);
-  var inputBuffers = new Map();
   var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var yieldEvery = deviceMemory > 0 && deviceMemory <= 4 ? 2 : modelStatus === 'webgpu' ? 8 : 4;
+  var mobileDevice = isMobileDevice();
+  // The ORT proxy worker transfers (detaches) input buffers. Reuse is safe on
+  // direct WASM/WebGPU, but proxy inference needs a fresh buffer per tile.
+  var inputBuffers = mobileDevice && modelStatus === 'wasm' ? null : new Map();
+  var yieldEvery = deviceMemory > 0 && deviceMemory <= 4
+    ? 1
+    : mobileDevice
+      ? modelStatus === 'webgpu' ? 4 : 2
+      : 4;
   var opaque = true;
   for (let alphaIndex = 3; alphaIndex < imageData.data.length; alphaIndex += 4) {
     if (imageData.data[alphaIndex] !== 255) {
@@ -194,10 +214,10 @@ async function runLocalTile(imageData, tile, ort, inputBuffers) {
   var planeSize = height * width;
   var inLen = 3 * planeSize;
   var bufferKey = width + 'x' + height;
-  var inputData = inputBuffers.get(bufferKey);
+  var inputData = inputBuffers?.get(bufferKey);
   if (!inputData) {
     inputData = new Float32Array(inLen);
-    inputBuffers.set(bufferKey, inputData);
+    inputBuffers?.set(bufferKey, inputData);
   }
   var inverse255 = 1 / 255;
   for (let y = 0; y < height; y++) {

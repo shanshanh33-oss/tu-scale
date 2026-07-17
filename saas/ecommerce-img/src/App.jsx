@@ -38,7 +38,7 @@ const MAX_OUTPUT_PIXELS = 80_000_000
 const MAX_AI_INPUT_EDGE = 2048
 const MAX_AI_INPUT_PIXELS = 4_200_000
 const MOBILE_MAX_OUTPUT_PIXELS = 24_000_000
-const MOBILE_MAX_AI_INPUT_PIXELS = 4_000_000
+const MOBILE_MAX_AI_INPUT_PIXELS = 2_000_000
 const MOBILE_BREAKPOINT = 767
 const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
@@ -839,7 +839,7 @@ const zipDownloadLockRef = useRef(false)
 
       if (aiUpscale && aiInputTooLarge) {
         blockReason = isMobileLayout
-          ? `AI 模式支持约 400 万像素以内的图片。当前图片为 ${formatMegapixels(inputPixels)}，建议关闭 AI 或使用电脑端。`
+          ? `AI 模式支持约 200 万像素以内的图片。当前图片为 ${formatMegapixels(inputPixels)}，建议关闭 AI 或使用电脑端。`
           : `AI 模式建议输入长边不超过 ${MAX_AI_INPUT_EDGE}px。请降低尺寸或关闭 AI 放大。`
       }
 
@@ -916,8 +916,8 @@ const zipDownloadLockRef = useRef(false)
   const processCanvasInTiles = async (sourceCanvas, processor, stageLabel, onStage = null, overlap = 2) => {
     const deviceMemory = Number(navigator.deviceMemory) || 0
     const lowMemoryDevice = deviceMemory > 0 && deviceMemory <= 4
-    const tileSize = isMobileLayout ? (deviceMemory >= 8 ? 512 : 384) : 640
-    const yieldEvery = lowMemoryDevice ? 2 : 4
+    const tileSize = isMobileLayout ? 384 : 640
+    const yieldEvery = lowMemoryDevice ? 1 : isMobileLayout ? 2 : 4
     const output = document.createElement('canvas')
     output.width = sourceCanvas.width
     output.height = sourceCanvas.height
@@ -2103,7 +2103,7 @@ const zipDownloadLockRef = useRef(false)
                   className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600" />
                 <span>
                   <strong className="block text-sm font-semibold text-gray-800">AI 放大（保持原图颜色）</strong>
-                  <span className="mt-1 block text-xs leading-5 text-gray-500">AI 只增强亮度细节，不调整色相和饱和度；分块处理支持约 400 万像素以内图片。</span>
+                  <span className="mt-1 block text-xs leading-5 text-gray-500">AI 保持原图色彩；手机端建议使用约 200 万像素以内图片，处理期间可查看分块进度。</span>
                 </span>
               </label>
               {aiUpscale && (
