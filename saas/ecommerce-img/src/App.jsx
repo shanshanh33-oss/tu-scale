@@ -1,7 +1,14 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, Crop, Copy } from 'lucide-react'
 import JSZip from 'jszip'
-import { enhanceCanvasWithAI, loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
+import {
+  enhanceCanvasWithAI,
+  isEnhanceModelLoaded,
+  isModelLoaded,
+  loadEnhanceModel,
+  loadModel,
+  processWithAI,
+} from './ai/waifu2x'
 import RewardButton from './tools/RewardButton'
 import { trackEvent } from './tools/shared'
 
@@ -196,6 +203,7 @@ const resizeCropRect = (rect, dx, dy, ratio = null) => {
   const [mobileUpscaleFactor, setMobileUpscaleFactor] = useState(2)
   const [aiModelLoading, setAiModelLoading] = useState(false)
   const [aiModelReady, setAiModelReady] = useState(false)
+  const usesMobileEnhanceModel = isMobileLayout && mobileProcessMode === 'enhance'
   const [cropEnabled, setCropEnabled] = useState(false)
   const [cropPreset, setCropPreset] = useState('free')
   const [cropRect, setCropRect] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 })
@@ -228,33 +236,38 @@ const resizeCropRect = (rect, dx, dy, ratio = null) => {
         setAiModelLoading(false)
         return
       }
-      if (isModelLoaded()) {
+      const modelReady = usesMobileEnhanceModel ? isEnhanceModelLoaded() : isModelLoaded()
+      if (modelReady) {
         setAiModelReady(true)
         return
       }
+      setAiModelReady(false)
       let cancelled = false
       setAiModelLoading(true)
-      loadModel()
+      const loader = usesMobileEnhanceModel ? loadEnhanceModel : loadModel
+      loader()
         .then((ok) => { if (!cancelled) setAiModelReady(!!ok) })
         .catch(() => { if (!cancelled) setAiModelReady(false) })
         .finally(() => { if (!cancelled) setAiModelLoading(false) })
       return () => { cancelled = true }
-    }, [aiUpscale])
+    }, [aiUpscale, usesMobileEnhanceModel])
 
   const ensureAiModel = useCallback(async () => {
-    if (!aiUpscale || aiModelReady) return
+    if (!aiUpscale) return
+    const modelReady = usesMobileEnhanceModel ? isEnhanceModelLoaded() : isModelLoaded()
+    if (modelReady) return
     setAiModelLoading(true)
     try {
-        const ok = await loadModel()
+        const loader = usesMobileEnhanceModel ? loadEnhanceModel : loadModel
+        const ok = await loader()
         setAiModelReady(!!ok)
         if (!ok) {
-          setAiUpscale(false)
           throw new Error('AI_MODEL_LOAD_FAILED')
         }
     } finally {
       setAiModelLoading(false)
     }
-  }, [aiUpscale, aiModelReady])
+  }, [aiUpscale, usesMobileEnhanceModel])
 
   const getProcessErrorMessage = useCallback((err) => {
       const msg = err?.message || ''
@@ -1065,10 +1078,10 @@ const zipDownloadLockRef = useRef(false)
             srcCtx.putImageData(sourceData, 0, 0)
           }
 
-          onStage?.('放大图片')
+          onStage?.(doEnhance.aiOriginalSize ? 'AI 原尺寸清晰化' : '放大图片')
 
           // Pre-sharpen original image before upscaling
-          if (doEnhance.smartSharpen && passes > 0) {
+          if (doEnhance.smartSharpen && passes > 0 && !doEnhance.aiOriginalSize) {
             if (isMobileLayout) {
               srcCanvas = await processCanvasInTiles(
                 srcCanvas,
@@ -1518,7 +1531,7 @@ const zipDownloadLockRef = useRef(false)
         setProcessStage(aiUpscale ? '加载 AI 模型' : '解析图片')
         await ensureAiModel()
         setProgress(20)
-        setProcessStage('放大图片')
+        setProcessStage(isMobileLayout && mobileProcessMode === 'enhance' ? 'AI 原尺寸清晰化' : '放大图片')
         const compareRes = await createCompareSourceImage(preview, cropOptions)
         setCompareSource(prev => {
           revokeObjectUrl(prev)
@@ -2151,7 +2164,7 @@ const zipDownloadLockRef = useRef(false)
                 </div>
               ) : (
                 <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-800">
-                  <p>AI 在每个分块内先做 2 倍细节重建，再还原到原始宽高；不会生成整张 2 倍大图，支持约 1300 万像素以内图片。</p>
+                  <p>专用 1 倍 AI 模型直接修复原尺寸像素，不再先放大后缩回；避免丢掉生成细节，支持约 1300 万像素以内图片。</p>
                   <p className={aiModelReady ? 'text-green-700' : aiModelLoading ? 'text-amber-700' : 'text-emerald-700'}>
                     {aiModelReady
                       ? 'AI 模型已在本机启用'
@@ -2519,7 +2532,7 @@ const zipDownloadLockRef = useRef(false)
                       style={{ width: `${progress}%` }} />
                   </div>
                     <div className="flex justify-between text-[10px] text-gray-400 px-0.5">
-                      <span>{'\u89e3\u6790'}</span><span>{'\u653e\u5927'}</span><span>{'\u9510\u5316'}</span><span>{'\u8f93\u51fa'}</span>
+                      <span>{'\u89e3\u6790'}</span><span>{isMobileLayout && mobileProcessMode === 'enhance' ? 'AI 修复' : '\u653e\u5927'}</span><span>{'\u9510\u5316'}</span><span>{'\u8f93\u51fa'}</span>
                     </div>
                     <div className="text-[11px] text-indigo-600 font-medium">{processStage || '准备处理'} · 进度为估算，大图或 AI 模式可能需要较长时间，请不要关闭页面</div>
                   </div>

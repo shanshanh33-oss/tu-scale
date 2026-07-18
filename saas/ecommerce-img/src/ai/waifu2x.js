@@ -2,6 +2,7 @@
 import wasmRuntimeUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 
 const MODEL_PATH = '/models/waifu2x.onnx';
+const ENHANCE_MODEL_PATH = '/models/waifu2x-enhance.onnx';
 const SERVER_URL = 'http://localhost:5179';
 const MODEL_PADDING = 7;
 const LOW_MEMORY_TILE_SIZE = 160;
@@ -12,6 +13,10 @@ let runtime = null;
 let useLocalModel = null;
 let loadingPromise = null;
 let modelStatus = 'unloaded';
+let enhanceSession = null;
+let enhanceRuntime = null;
+let enhanceLoadingPromise = null;
+let enhanceModelStatus = 'unloaded';
 
 function isMobileDevice() {
   if (typeof navigator === 'undefined') return false;
@@ -134,6 +139,37 @@ export async function loadModel() {
 export function isModelLoaded() { return !!session || modelStatus === 'server'; }
 export function getModelStatus() { return modelStatus; }
 
+export async function loadEnhanceModel() {
+  if (enhanceSession) return true;
+  if (enhanceLoadingPromise) return enhanceLoadingPromise;
+
+  enhanceLoadingPromise = (async function() {
+    enhanceModelStatus = 'loading';
+    try {
+      var response = await fetch(ENHANCE_MODEL_PATH);
+      if (!response.ok) throw new Error('Enhance model download failed');
+      var buffer = await response.arrayBuffer();
+      var browser = await createBrowserSession(buffer);
+      enhanceRuntime = browser.ort;
+      enhanceSession = browser.session;
+      enhanceModelStatus = browser.backend;
+      return true;
+    } catch {
+      enhanceSession = null;
+      enhanceRuntime = null;
+      enhanceModelStatus = 'failed';
+      return false;
+    }
+  })().finally(function() {
+    enhanceLoadingPromise = null;
+  });
+
+  return enhanceLoadingPromise;
+}
+
+export function isEnhanceModelLoaded() { return !!enhanceSession; }
+export function getEnhanceModelStatus() { return enhanceModelStatus; }
+
 export async function upscaleWithAI(imageData, scale = 2, options = {}) {
   if (typeof scale === 'object' && scale !== null) {
     options = scale;
@@ -145,32 +181,12 @@ export async function upscaleWithAI(imageData, scale = 2, options = {}) {
   throw new Error('AI model not available');
 }
 
-// For large phone photos, run the same 2x AI model one tile at a time and
-// reduce each completed tile back to its original dimensions immediately.
-// This keeps AI reconstruction without ever allocating a full-size 2x image.
+// The dedicated VGG7 photo model repairs every tile directly at 1x. Unlike the
+// old 2x-then-reduce path, generated detail is never discarded by downscaling.
 export async function enhanceCanvasWithAI(sourceCanvas, options = {}) {
-  if (useLocalModel === null && !session) await loadModel();
-
-  if (useLocalModel === false) {
-    var sourceContext = sourceCanvas.getContext('2d');
-    var sourceImage = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
-    var serverResult = await runServer(sourceImage, 2);
-    var serverCanvas = document.createElement('canvas');
-    serverCanvas.width = serverResult.width;
-    serverCanvas.height = serverResult.height;
-    serverCanvas.getContext('2d').putImageData(serverResult, 0, 0);
-    var serverOutput = document.createElement('canvas');
-    serverOutput.width = sourceCanvas.width;
-    serverOutput.height = sourceCanvas.height;
-    var serverOutputContext = serverOutput.getContext('2d');
-    serverOutputContext.imageSmoothingEnabled = true;
-    serverOutputContext.imageSmoothingQuality = 'high';
-    serverOutputContext.drawImage(serverCanvas, 0, 0, serverOutput.width, serverOutput.height);
-    return serverOutput;
-  }
-
-  if (!session) throw new Error('AI model not available');
-  return runLocalCanvasAtOriginalSize(sourceCanvas, options);
+  if (!enhanceSession) await loadEnhanceModel();
+  if (!enhanceSession) throw new Error('AI enhance model not available');
+  return runLocalEnhanceCanvas(sourceCanvas, options);
 }
 
 function getTileSize(options = {}) {
@@ -246,10 +262,13 @@ async function runLocal(imageData, options = {}) {
   return new ImageData(outputData, outputWidth, outputHeight);
 }
 
-async function runLocalCanvasAtOriginalSize(sourceCanvas, options = {}) {
-  var tileSize = getTileSize(options);
+async function runLocalEnhanceCanvas(sourceCanvas, options = {}) {
+  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
+  var tileSize = Number.isFinite(options.tileSize)
+    ? Math.max(64, Math.min(512, Math.round(options.tileSize)))
+    : deviceMemory > 0 && deviceMemory <= 4 ? 192 : isMobileDevice() ? 224 : 384;
   var tiles = createTilePlan(sourceCanvas.width, sourceCanvas.height, tileSize);
-  var ort = runtime || await loadWasmOrt();
+  var ort = enhanceRuntime || await loadWasmOrt();
   var sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
   var outputCanvas = document.createElement('canvas');
   outputCanvas.width = sourceCanvas.width;
@@ -259,17 +278,17 @@ async function runLocalCanvasAtOriginalSize(sourceCanvas, options = {}) {
 
   for (let index = 0; index < tiles.length; index++) {
     var tile = tiles[index];
-    var extraRight = tile.coreWidth % 2;
-    var extraBottom = tile.coreHeight % 2;
+    tile.inputWidth = tile.coreWidth + tile.padding * 2;
+    tile.inputHeight = tile.coreHeight + tile.padding * 2;
     var inputX = Math.max(0, tile.coreX - tile.padding);
     var inputY = Math.max(0, tile.coreY - tile.padding);
     var inputRight = Math.min(
       sourceCanvas.width,
-      tile.coreX + tile.coreWidth + tile.padding + extraRight,
+      tile.coreX + tile.coreWidth + tile.padding,
     );
     var inputBottom = Math.min(
       sourceCanvas.height,
-      tile.coreY + tile.coreHeight + tile.padding + extraBottom,
+      tile.coreY + tile.coreHeight + tile.padding,
     );
     var localImage = sourceContext.getImageData(
       inputX,
@@ -282,9 +301,9 @@ async function runLocalCanvasAtOriginalSize(sourceCanvas, options = {}) {
       coreX: tile.coreX - inputX,
       coreY: tile.coreY - inputY,
     };
-    var tileResult = await runLocalTile(localImage, localTile, ort, inputBuffers);
-    var originalSizeTile = createOriginalSizeTile(tileResult, localImage, localTile);
-    outputContext.putImageData(originalSizeTile, tile.coreX, tile.coreY);
+    var tileResult = await runLocalTile(localImage, localTile, ort, inputBuffers, enhanceSession);
+    var enhancedTile = createEnhanceTile(tileResult, localImage, localTile);
+    outputContext.putImageData(enhancedTile, tile.coreX, tile.coreY);
     tileResult.dispose?.();
     options.onProgress?.({ completed: index + 1, total: tiles.length });
     await yieldToBrowser();
@@ -293,7 +312,7 @@ async function runLocalCanvasAtOriginalSize(sourceCanvas, options = {}) {
   return outputCanvas;
 }
 
-async function runLocalTile(imageData, tile, ort, inputBuffers) {
+async function runLocalTile(imageData, tile, ort, inputBuffers, activeSession = session) {
   var { data } = imageData;
   var width = tile.inputWidth;
   var height = tile.inputHeight;
@@ -322,9 +341,9 @@ async function runLocalTile(imageData, tile, ort, inputBuffers) {
     }
   }
   var t = new ort.Tensor('float32', inputData, [1, 3, height, width]);
-  var inputName = session.inputNames?.[0] || 'Input1';
-  var outputName = session.outputNames?.[0] || 'output';
-  var r = await session.run({ [inputName]: t });
+  var inputName = activeSession.inputNames?.[0] || 'Input1';
+  var outputName = activeSession.outputNames?.[0] || 'output';
+  var r = await activeSession.run({ [inputName]: t });
   return r[outputName] || Object.values(r)[0];
 }
 
@@ -355,26 +374,18 @@ function copyModelTile(modelOutput, imageData, outputData, outputWidth, tile, op
   }
 }
 
-function createOriginalSizeTile(modelOutput, sourceImage, tile) {
+function createEnhanceTile(modelOutput, sourceImage, tile) {
   var modelWidth = modelOutput.dims[3];
   var modelPixels = modelOutput.dims[2] * modelWidth;
   var output = new Uint8ClampedArray(tile.coreWidth * tile.coreHeight * 4);
   for (let y = 0; y < tile.coreHeight; y++) {
-    var topRow = y * 2 * modelWidth;
-    var bottomRow = topRow + modelWidth;
+    var modelRow = y * modelWidth;
     for (let x = 0; x < tile.coreWidth; x++) {
-      var topLeft = topRow + x * 2;
-      var bottomLeft = bottomRow + x * 2;
+      var modelPixel = modelRow + x;
       var destination = (y * tile.coreWidth + x) * 4;
       for (let channel = 0; channel < 3; channel++) {
         var plane = channel * modelPixels;
-        var average = (
-          modelOutput.data[plane + topLeft]
-          + modelOutput.data[plane + topLeft + 1]
-          + modelOutput.data[plane + bottomLeft]
-          + modelOutput.data[plane + bottomLeft + 1]
-        ) * 0.25;
-        output[destination + channel] = modelByte(average);
+        output[destination + channel] = modelByte(modelOutput.data[plane + modelPixel]);
       }
       var sourcePixel = (
         (tile.coreY + y) * sourceImage.width
