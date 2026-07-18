@@ -570,6 +570,10 @@ const renderStatsShell = () => `<!doctype html>
     </header>
     <div id="metrics" class="metrics"></div>
     <section>
+      <div class="section-head"><h2>访问版本</h2><p>自 2026-07-18 起按匿名事件区分电脑版与手机版。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>版本</th><th>累计事件</th><th>昨日事件</th></tr></thead><tbody id="editionRows"></tbody></table></div>
+    </section>
+    <section>
       <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、图片压缩和商品图规范化拆分。</p></div>
       <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>昨日独立访客</th><th>上传 累计/昨日</th><th>成功 累计/昨日</th><th>首次导出 累计/昨日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
@@ -597,9 +601,10 @@ const renderStatsShell = () => `<!doctype html>
     const ANOMALOUS_DAYS = { '2026-07-12': '旧版 ZIP 重复触发：426 不是不同图片的成功导出数' };
     const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
-    const BUSINESS_LABELS = { edition: '访问版本（事件数）', source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
+    const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
     const BUSINESS_VALUE_LABELS = { edition: { desktop: '电脑版', mobile: '手机版' } };
-    const emptyBusiness = () => Object.fromEntries(Object.keys(BUSINESS_LABELS).map((field) => [field, {}]));
+    const BUSINESS_FIELDS = ['edition', ...Object.keys(BUSINESS_LABELS)];
+    const emptyBusiness = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]));
     const STATS_START_DATE = '${STATS_START_DATE}';
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
     const sum = (source, events) => events.reduce((total, event) => total + (source[event] || 0), 0);
@@ -660,6 +665,11 @@ const renderStatsShell = () => `<!doctype html>
         card('累计上传', totals.image_uploaded, '成功处理 ' + fmt(processedTotal)),
         card('累计首次导出图片', exportedTotal, '成功下载操作 ' + fmt(totals.download_success)),
       ].join('');
+
+      const editions = ['desktop', 'mobile'];
+      const editionTotals = totalBusiness.edition || {};
+      const editionYesterday = yesterday.business?.edition || {};
+      document.getElementById('editionRows').innerHTML = editions.map((edition) => '<tr><td><b>' + (BUSINESS_VALUE_LABELS.edition[edition] || edition) + '</b></td><td>' + fmt(editionTotals[edition]) + '</td><td>' + fmt(editionYesterday[edition]) + '</td></tr>').join('');
 
       document.getElementById('toolRows').innerHTML = ['upscale', 'converter', 'product_image'].map((tool) => {
         const total = totalTools[tool] || emptyMetrics();
