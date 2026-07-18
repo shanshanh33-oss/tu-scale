@@ -22,6 +22,7 @@ const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image'])
 const IDEMPOTENT_EVENTS = new Set(['download_success', 'exported_image'])
 const MAX_BATCH_EVENTS = 5
 const SOURCE_VALUES = new Set(['direct', 'google', 'baidu', 'external'])
+const EDITION_VALUES = new Set(['desktop', 'mobile'])
 const ERROR_CODES = new Set(['image_decode', 'file_read', 'canvas_limit', 'ai_input_limit', 'ai_model', 'export', 'network', 'api_limit', 'unsupported_format', 'unknown'])
 
 const clampInteger = (value, min, max) => {
@@ -93,6 +94,7 @@ const normalizeEventPayload = (item) => {
     sessionId: ID_PATTERN.test(sessionId) ? sessionId : '',
     analytics: {
       source: SOURCE_VALUES.has(data.source) ? data.source : '',
+      edition: EDITION_VALUES.has(data.edition) ? data.edition : 'desktop',
       scale: ['1', '2', '4', 'custom'].includes(String(data.scale || '')) ? String(data.scale) : '',
       aiMode: data.ai === true ? 'ai' : data.ai === false ? 'standard' : '',
       aiDetailMode: ['photo', 'anime'].includes(String(data.aiDetailMode || '')) ? String(data.aiDetailMode) : '',

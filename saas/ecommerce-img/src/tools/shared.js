@@ -151,6 +151,7 @@ export const trackEvent = (event, data = {}) => {
       tool: inferTool(),
       source: getTrafficSource(),
       ...data,
+      edition: 'mobile',
       ...getAnalyticsIdentity(),
     },
   })
