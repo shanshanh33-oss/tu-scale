@@ -571,7 +571,7 @@ const renderStatsShell = () => `<!doctype html>
     <div id="metrics" class="metrics"></div>
     <section>
       <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、图片压缩和商品图规范化拆分。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>首次导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>昨日独立访客</th><th>上传 累计/昨日</th><th>成功 累计/昨日</th><th>首次导出 累计/昨日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
     <section>
       <div class="section-head"><h2>商业行为信号</h2><p>按已结算的匿名事件汇总，用于判断套餐与积分需求。</p></div>
@@ -583,7 +583,7 @@ const renderStatsShell = () => `<!doctype html>
     </section>
     <section>
       <div class="section-head"><h2>事件明细</h2><p>给调试和判断功能使用情况时看。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>中文名称</th><th>事件名</th><th>累计</th><th>今天</th></tr></thead><tbody id="eventRows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>中文名称</th><th>事件名</th><th>累计</th><th>昨日</th></tr></thead><tbody id="eventRows"></tbody></table></div>
     </section>
     <p id="note" class="note">正在读取每日汇总。</p>
   </main>
@@ -597,7 +597,8 @@ const renderStatsShell = () => `<!doctype html>
     const ANOMALOUS_DAYS = { '2026-07-12': '旧版 ZIP 重复触发：426 不是不同图片的成功导出数' };
     const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
-    const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
+    const BUSINESS_LABELS = { edition: '访问版本（事件数）', source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
+    const BUSINESS_VALUE_LABELS = { edition: { desktop: '电脑版', mobile: '手机版' } };
     const emptyBusiness = () => Object.fromEntries(Object.keys(BUSINESS_LABELS).map((field) => [field, {}]));
     const STATS_START_DATE = '${STATS_START_DATE}';
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
@@ -642,18 +643,19 @@ const renderStatsShell = () => `<!doctype html>
 
     const render = (days) => {
       const today = days[0] || { ...emptyMetrics(), tools: emptyTools() };
+      const yesterday = days.find((day) => day.day === dayText(1)) || { ...emptyMetrics(), tools: emptyTools(), settlementStatus: 'pending', day: dayText(1) };
       const totals = emptyMetrics();
       const totalTools = emptyTools();
       const totalBusiness = emptyBusiness();
       days.forEach((day) => { addMetrics(totals, day); addTools(totalTools, day.tools); addBusiness(totalBusiness, day.business); });
       const processedTotal = sum(totals, ['process_success', 'batch_item_success']);
       const errors = sum(totals, ['process_error', 'batch_item_error']);
-      const exportedToday = today.exported_image || 0;
+      const exportedYesterday = yesterday.exported_image || 0;
       const exportedTotal = totals.exported_image || 0;
       document.getElementById('metrics').innerHTML = [
-        card('今日独立访客', today.unique_visitor, today.settlementStatus === 'collecting' ? '当天数据将在次日结算' : '访问会话 ' + fmt(today.session_start)),
-        card('今天上传', today.image_uploaded, today.settlementStatus === 'collecting' ? '当天数据将在次日结算' : '处理成功 ' + fmt(sum(today, ['process_success', 'batch_item_success']))),
-        card('今天首次导出图片', exportedToday, today.settlementStatus === 'collecting' ? '当天数据将在次日结算' : '成功下载操作 ' + fmt(today.download_success)),
+        card('昨日独立访客', yesterday.unique_visitor, yesterday.settlementStatus === 'finalized' ? '访问会话 ' + fmt(yesterday.session_start) : '昨日数据正在结算'),
+        card('昨日上传', yesterday.image_uploaded, yesterday.settlementStatus === 'finalized' ? '处理成功 ' + fmt(sum(yesterday, ['process_success', 'batch_item_success'])) : '昨日数据正在结算'),
+        card('昨日首次导出图片', exportedYesterday, yesterday.settlementStatus === 'finalized' ? '成功下载操作 ' + fmt(yesterday.download_success) : '昨日数据正在结算'),
         card('累计独立访客', totals.unique_visitor, '累计会话 ' + fmt(totals.session_start)),
         card('累计上传', totals.image_uploaded, '成功处理 ' + fmt(processedTotal)),
         card('累计首次导出图片', exportedTotal, '成功下载操作 ' + fmt(totals.download_success)),
@@ -661,12 +663,12 @@ const renderStatsShell = () => `<!doctype html>
 
       document.getElementById('toolRows').innerHTML = ['upscale', 'converter', 'product_image'].map((tool) => {
         const total = totalTools[tool] || emptyMetrics();
-        const todayValue = today.tools?.[tool] || emptyMetrics();
-        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(todayValue.exported_image) + '</td></tr>';
+        const yesterdayValue = yesterday.tools?.[tool] || emptyMetrics();
+        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(yesterdayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(yesterdayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(yesterdayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(yesterdayValue.exported_image) + '</td></tr>';
       }).join('');
       document.getElementById('businessRows').innerHTML = Object.entries(BUSINESS_LABELS).map(([field, label]) => {
         const values = Object.entries(totalBusiness[field]).sort((a, b) => b[1] - a[1]);
-        return '<tr><td><b>' + label + '</b></td><td>' + (values.length ? values.map(([key, value]) => key + '：' + fmt(value)).join(' / ') : '暂无已结算数据') + '</td></tr>';
+        return '<tr><td><b>' + label + '</b></td><td>' + (values.length ? values.map(([key, value]) => (BUSINESS_VALUE_LABELS[field]?.[key] || key) + '：' + fmt(value)).join(' / ') : '暂无已结算数据') + '</td></tr>';
       }).join('');
 
       const recent = [...days].reverse();
@@ -682,7 +684,7 @@ const renderStatsShell = () => `<!doctype html>
         return '<tr><td>' + day.day + anomaly + settlement + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(day.download_success) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td><td><b>' + fmt(legacyExported) + '</b></td></tr>';
       }).join('');
 
-      document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(today[event]) + '</td></tr>').join('');
+      document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(yesterday[event]) + '</td></tr>').join('');
       const eventLogs = days.reduce((total, day) => total + day.eventLogCount, 0);
       const legacyReads = days.reduce((total, day) => total + day.legacyReadCount, 0);
       const metadataReads = days.reduce((total, day) => total + day.metadataReadCount, 0);
