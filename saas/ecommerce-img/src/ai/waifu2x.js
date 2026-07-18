@@ -145,6 +145,34 @@ export async function upscaleWithAI(imageData, scale = 2, options = {}) {
   throw new Error('AI model not available');
 }
 
+// For large phone photos, run the same 2x AI model one tile at a time and
+// reduce each completed tile back to its original dimensions immediately.
+// This keeps AI reconstruction without ever allocating a full-size 2x image.
+export async function enhanceCanvasWithAI(sourceCanvas, options = {}) {
+  if (useLocalModel === null && !session) await loadModel();
+
+  if (useLocalModel === false) {
+    var sourceContext = sourceCanvas.getContext('2d');
+    var sourceImage = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+    var serverResult = await runServer(sourceImage, 2);
+    var serverCanvas = document.createElement('canvas');
+    serverCanvas.width = serverResult.width;
+    serverCanvas.height = serverResult.height;
+    serverCanvas.getContext('2d').putImageData(serverResult, 0, 0);
+    var serverOutput = document.createElement('canvas');
+    serverOutput.width = sourceCanvas.width;
+    serverOutput.height = sourceCanvas.height;
+    var serverOutputContext = serverOutput.getContext('2d');
+    serverOutputContext.imageSmoothingEnabled = true;
+    serverOutputContext.imageSmoothingQuality = 'high';
+    serverOutputContext.drawImage(serverCanvas, 0, 0, serverOutput.width, serverOutput.height);
+    return serverOutput;
+  }
+
+  if (!session) throw new Error('AI model not available');
+  return runLocalCanvasAtOriginalSize(sourceCanvas, options);
+}
+
 function getTileSize(options = {}) {
   if (Number.isFinite(options.tileSize)) {
     return Math.max(64, Math.min(512, Math.round(options.tileSize)));
@@ -210,11 +238,59 @@ async function runLocal(imageData, options = {}) {
     var tile = tiles[index];
     var tileResult = await runLocalTile(imageData, tile, ort, inputBuffers);
     copyModelTile(tileResult, imageData, outputData, outputWidth, tile, opaque);
+    tileResult.dispose?.();
     options.onProgress?.({ completed: index + 1, total: tiles.length });
     if ((index + 1) % yieldEvery === 0 || index === tiles.length - 1) await yieldToBrowser();
   }
 
   return new ImageData(outputData, outputWidth, outputHeight);
+}
+
+async function runLocalCanvasAtOriginalSize(sourceCanvas, options = {}) {
+  var tileSize = getTileSize(options);
+  var tiles = createTilePlan(sourceCanvas.width, sourceCanvas.height, tileSize);
+  var ort = runtime || await loadWasmOrt();
+  var sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  var outputCanvas = document.createElement('canvas');
+  outputCanvas.width = sourceCanvas.width;
+  outputCanvas.height = sourceCanvas.height;
+  var outputContext = outputCanvas.getContext('2d');
+  var inputBuffers = new Map();
+
+  for (let index = 0; index < tiles.length; index++) {
+    var tile = tiles[index];
+    var extraRight = tile.coreWidth % 2;
+    var extraBottom = tile.coreHeight % 2;
+    var inputX = Math.max(0, tile.coreX - tile.padding);
+    var inputY = Math.max(0, tile.coreY - tile.padding);
+    var inputRight = Math.min(
+      sourceCanvas.width,
+      tile.coreX + tile.coreWidth + tile.padding + extraRight,
+    );
+    var inputBottom = Math.min(
+      sourceCanvas.height,
+      tile.coreY + tile.coreHeight + tile.padding + extraBottom,
+    );
+    var localImage = sourceContext.getImageData(
+      inputX,
+      inputY,
+      inputRight - inputX,
+      inputBottom - inputY,
+    );
+    var localTile = {
+      ...tile,
+      coreX: tile.coreX - inputX,
+      coreY: tile.coreY - inputY,
+    };
+    var tileResult = await runLocalTile(localImage, localTile, ort, inputBuffers);
+    var originalSizeTile = createOriginalSizeTile(tileResult, localImage, localTile);
+    outputContext.putImageData(originalSizeTile, tile.coreX, tile.coreY);
+    tileResult.dispose?.();
+    options.onProgress?.({ completed: index + 1, total: tiles.length });
+    await yieldToBrowser();
+  }
+
+  return outputCanvas;
 }
 
 async function runLocalTile(imageData, tile, ort, inputBuffers) {
@@ -277,6 +353,38 @@ function copyModelTile(modelOutput, imageData, outputData, outputWidth, tile, op
       destination += 4;
     }
   }
+}
+
+function createOriginalSizeTile(modelOutput, sourceImage, tile) {
+  var modelWidth = modelOutput.dims[3];
+  var modelPixels = modelOutput.dims[2] * modelWidth;
+  var output = new Uint8ClampedArray(tile.coreWidth * tile.coreHeight * 4);
+  for (let y = 0; y < tile.coreHeight; y++) {
+    var topRow = y * 2 * modelWidth;
+    var bottomRow = topRow + modelWidth;
+    for (let x = 0; x < tile.coreWidth; x++) {
+      var topLeft = topRow + x * 2;
+      var bottomLeft = bottomRow + x * 2;
+      var destination = (y * tile.coreWidth + x) * 4;
+      for (let channel = 0; channel < 3; channel++) {
+        var plane = channel * modelPixels;
+        var average = (
+          modelOutput.data[plane + topLeft]
+          + modelOutput.data[plane + topLeft + 1]
+          + modelOutput.data[plane + bottomLeft]
+          + modelOutput.data[plane + bottomLeft + 1]
+        ) * 0.25;
+        output[destination + channel] = modelByte(average);
+      }
+      var sourcePixel = (
+        (tile.coreY + y) * sourceImage.width
+        + tile.coreX
+        + x
+      ) * 4;
+      output[destination + 3] = sourceImage.data[sourcePixel + 3];
+    }
+  }
+  return new ImageData(output, tile.coreWidth, tile.coreHeight);
 }
 async function runServer(imageData, scale) {
   var c = document.createElement('canvas');

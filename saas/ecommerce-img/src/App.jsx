@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, Crop, Copy } from 'lucide-react'
 import JSZip from 'jszip'
-import { loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
+import { enhanceCanvasWithAI, loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
 import RewardButton from './tools/RewardButton'
 import { trackEvent } from './tools/shared'
 
@@ -39,6 +39,10 @@ const MAX_AI_INPUT_EDGE = 2048
 const MAX_AI_INPUT_PIXELS = 4_200_000
 const MOBILE_MAX_OUTPUT_PIXELS = 24_000_000
 const MOBILE_MAX_AI_INPUT_PIXELS = 2_000_000
+const MOBILE_MAX_AI_INPUT_PIXELS_3X = 1_500_000
+// Covers common 4032×3024 phone photos (about 12.2 MP) without rounding them
+// into an artificial 12 MP rejection boundary.
+const MOBILE_MAX_AI_ENHANCE_INPUT_PIXELS = 13_000_000
 const MOBILE_BREAKPOINT = 767
 const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
@@ -188,6 +192,8 @@ const resizeCropRect = (rect, dx, dy, ratio = null) => {
   const [smartDenoise, setSmartDenoise] = useState(false)
   const [edgeInterpolation, setEdgeInterpolation] = useState(false)
   const [antiAlias, setAntiAlias] = useState(false)
+  const [mobileProcessMode, setMobileProcessMode] = useState('enhance')
+  const [mobileUpscaleFactor, setMobileUpscaleFactor] = useState(2)
   const [aiModelLoading, setAiModelLoading] = useState(false)
   const [aiModelReady, setAiModelReady] = useState(false)
   const [cropEnabled, setCropEnabled] = useState(false)
@@ -388,7 +394,8 @@ const zipDownloadLockRef = useRef(false)
       return []
     })
     setScaleMode('scale')
-    setScale(2)
+    setScale(mobileProcessMode === 'enhance' ? 1 : mobileUpscaleFactor)
+    setAiUpscale(true)
     setCropEnabled(false)
     setKeepRatio(true)
     setSmartSharpen(true)
@@ -401,8 +408,8 @@ const zipDownloadLockRef = useRef(false)
     setVibrance(false)
     setSmartDenoise(false)
     setEdgeInterpolation(false)
-    setAntiAlias(false)
-  }, [isMobileLayout])
+    setAntiAlias(true)
+  }, [isMobileLayout, mobileProcessMode, mobileUpscaleFactor])
 
   // --- 保存设置到 localStorage ---
   useEffect(() => {
@@ -823,14 +830,24 @@ const zipDownloadLockRef = useRef(false)
       let blockReason = ''
       const maxOutputPixels = isMobileLayout ? MOBILE_MAX_OUTPUT_PIXELS : MAX_OUTPUT_PIXELS
       const warnOutputPixels = isMobileLayout ? 18_000_000 : WARN_OUTPUT_PIXELS
-      const maxAiInputPixels = isMobileLayout ? MOBILE_MAX_AI_INPUT_PIXELS : MAX_AI_INPUT_PIXELS
+      const maxAiInputPixels = isMobileLayout
+        ? mobileProcessMode === 'enhance'
+          ? MOBILE_MAX_AI_ENHANCE_INPUT_PIXELS
+          : scale >= 3 ? MOBILE_MAX_AI_INPUT_PIXELS_3X : MOBILE_MAX_AI_INPUT_PIXELS
+        : MAX_AI_INPUT_PIXELS
 
       if (outputPixels > maxOutputPixels) {
         blockReason = isMobileLayout
-          ? `图片太大：2 倍输出预计 ${formatMegapixels(outputPixels)}，手机浏览器可能卡顿或退出。建议使用电脑端处理。`
+          ? mobileProcessMode === 'enhance'
+            ? `原图为 ${formatMegapixels(inputPixels)}，超过手机端约 2400 万像素的安全上限。建议使用系统相册先导出较小副本。`
+            : `图片太大：${scale} 倍输出预计 ${formatMegapixels(outputPixels)}，手机浏览器可能卡顿或退出。可改用“原尺寸清晰化”。`
           : `输出预计 ${formatMegapixels(outputPixels)}，浏览器端处理风险太高。请降低倍数或分辨率。`
       } else if (outputPixels > warnOutputPixels) {
         warnings.push(`输出预计 ${formatMegapixels(outputPixels)}，处理会更慢，也会占用更多内存。`)
+      }
+
+      if (isMobileLayout && mobileProcessMode === 'enhance' && inputPixels > 6_000_000) {
+        warnings.push(`AI 原尺寸清晰化将分块处理 ${formatMegapixels(inputPixels)}，不会放大尺寸，但可能需要较长时间。`)
       }
 
       const aiInputTooLarge = isMobileLayout
@@ -839,12 +856,14 @@ const zipDownloadLockRef = useRef(false)
 
       if (aiUpscale && aiInputTooLarge) {
         blockReason = isMobileLayout
-          ? `AI 模式支持约 200 万像素以内的图片。当前图片为 ${formatMegapixels(inputPixels)}，建议关闭 AI 或使用电脑端。`
+          ? mobileProcessMode === 'enhance'
+            ? `AI 原尺寸清晰化支持约 1300 万像素以内图片。当前图片为 ${formatMegapixels(inputPixels)}，建议使用系统相册先导出较小副本。`
+            : `AI ${scale} 倍模式支持约 ${scale >= 3 ? '150' : '200'} 万像素以内图片。当前图片为 ${formatMegapixels(inputPixels)}，可改用“原尺寸清晰化”。`
           : `AI 模式建议输入长边不超过 ${MAX_AI_INPUT_EDGE}px。请降低尺寸或关闭 AI 放大。`
       }
 
       return { outputPixels, inputPixels, inputEdge, warnings, blockReason }
-    }, [origDims, expectedOutput, aiUpscale, cropEnabled, cropRect, isMobileLayout])
+    }, [origDims, expectedOutput, aiUpscale, cropEnabled, cropRect, isMobileLayout, mobileProcessMode, scale])
 
   const sourceDimsForPreview = useMemo(() => (
     getSourceDims(origDims, cropEnabled, cropRect)
@@ -1072,18 +1091,24 @@ const zipDownloadLockRef = useRef(false)
 
           if (doEnhance.aiUpscale) {
             // AI放大：使用 waifu2x 模型
-            const aiPasses = avgScale >= 4 ? 2 : 1
             let aiCanvas = srcCanvas
-            for (let i = 0; i < aiPasses; i++) {
-              const aiData = aiCanvas.getContext('2d').getImageData(0, 0, aiCanvas.width, aiCanvas.height)
-              const aiResult = await processWithAI(aiData, 2, {
-                detailMode: 'preserve',
-                onProgress: ({ completed, total }) => onStage?.(`AI 分块处理 ${completed}/${total}`),
+            if (doEnhance.aiOriginalSize) {
+              aiCanvas = await enhanceCanvasWithAI(srcCanvas, {
+                onProgress: ({ completed, total }) => onStage?.(`AI 原尺寸分块 ${completed}/${total}`),
               })
-              aiCanvas = document.createElement('canvas')
-              aiCanvas.width = aiResult.width
-              aiCanvas.height = aiResult.height
-              aiCanvas.getContext('2d').putImageData(aiResult, 0, 0)
+            } else {
+              const aiPasses = avgScale >= 4 ? 2 : 1
+              for (let i = 0; i < aiPasses; i++) {
+                const aiData = aiCanvas.getContext('2d').getImageData(0, 0, aiCanvas.width, aiCanvas.height)
+                const aiResult = await processWithAI(aiData, 2, {
+                  detailMode: 'preserve',
+                  onProgress: ({ completed, total }) => onStage?.(`AI 分块处理 ${completed}/${total}`),
+                })
+                aiCanvas = document.createElement('canvas')
+                aiCanvas.width = aiResult.width
+                aiCanvas.height = aiResult.height
+                aiCanvas.getContext('2d').putImageData(aiResult, 0, 0)
+              }
             }
             const dstCanvas = aiCanvas.width === targetW && aiCanvas.height === targetH
               ? aiCanvas
@@ -1503,6 +1528,7 @@ const zipDownloadLockRef = useRef(false)
         const res = await processImageWithCanvas(preview, targetW, targetH, {
           smartSharpen,
           aiUpscale,
+          aiOriginalSize: isMobileLayout && mobileProcessMode === 'enhance',
           aiDetailMode: 'preserve',
           reduceArtifacts: false,
           reduceMoire: false,
@@ -1550,7 +1576,7 @@ const zipDownloadLockRef = useRef(false)
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, isMobileLayout, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, isMobileLayout, mobileProcessMode, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -1812,7 +1838,7 @@ const zipDownloadLockRef = useRef(false)
         </div>
 
         <section className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
-          <p className="text-sm font-semibold text-indigo-800">{isMobileLayout ? '手机版默认 2 倍放大，上传一张图片即可开始' : '新用户推荐从 2 倍开始，上传后保持默认设置即可处理'}</p>
+          <p className="text-sm font-semibold text-indigo-800">{isMobileLayout ? '大图可用 AI 原尺寸清晰化，小图可选择 AI 2 倍或 3 倍放大' : '新用户推荐从 2 倍开始，上传后保持默认设置即可处理'}</p>
           <p className="mt-1 text-xs leading-5 text-indigo-600">适合头像、照片、插画和网页配图；图片只在当前设备处理，不会上传服务器。</p>
         </section>
 
@@ -2083,37 +2109,57 @@ const zipDownloadLockRef = useRef(false)
         <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 space-y-4">
           {isMobileLayout ? (
             <div className="space-y-4">
-              <div className="flex items-start justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-indigo-800">手机精简模式</h2>
-                  <p className="mt-1 text-xs leading-5 text-indigo-600">固定 2 倍放大并自动清晰化，减少手机内存占用。</p>
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                <h2 className="px-1 text-sm font-semibold text-indigo-800">选择处理方式</h2>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setMobileProcessMode('enhance')}
+                    className={`rounded-xl border px-3 py-3 text-left ${mobileProcessMode === 'enhance' ? 'border-indigo-400 bg-white text-indigo-700 shadow-sm' : 'border-indigo-100 bg-white/60 text-gray-500'}`}>
+                    <strong className="block text-sm">AI 原尺寸清晰化</strong>
+                    <span className="mt-1 block text-[11px] leading-4">大图推荐 · 尺寸不变</span>
+                  </button>
+                  <button type="button" onClick={() => setMobileProcessMode('upscale')}
+                    className={`rounded-xl border px-3 py-3 text-left ${mobileProcessMode === 'upscale' ? 'border-indigo-400 bg-white text-indigo-700 shadow-sm' : 'border-indigo-100 bg-white/60 text-gray-500'}`}>
+                    <strong className="block text-sm">AI 放大变清晰</strong>
+                    <span className="mt-1 block text-[11px] leading-4">小图适用 · 2x/3x</span>
+                  </button>
                 </div>
-                <span className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-indigo-700 shadow-sm">2x</span>
               </div>
 
-              <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 select-none ${
-                aiUpscale ? 'border-indigo-300 bg-indigo-50/50' : 'border-gray-200 bg-gray-50/60'
-              }`}>
-                <input type="checkbox" checked={aiUpscale}
-                  onChange={(event) => {
-                    const enabled = event.target.checked
-                    setAiUpscale(enabled)
-                    if (enabled) trackEvent('ai_enabled', { source: 'mobile' })
-                  }}
-                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600" />
-                <span>
-                  <strong className="block text-sm font-semibold text-gray-800">AI 放大（保持原图颜色）</strong>
-                  <span className="mt-1 block text-xs leading-5 text-gray-500">AI 保持原图色彩；手机端建议使用约 200 万像素以内图片，处理期间可查看分块进度。</span>
-                </span>
-              </label>
-              {aiUpscale && (
-                <p className={`-mt-2 rounded-lg px-3 py-2 text-xs ${aiModelReady ? 'bg-green-50 text-green-700' : aiModelLoading ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
-                  {aiModelReady
-                    ? 'AI 模型已下载并在本机启用'
-                    : aiModelLoading
-                      ? '正在下载并启动 AI 模型…'
-                      : 'AI 模型尚未加载成功，处理时会自动重试'}
-                </p>
+              {mobileProcessMode === 'upscale' ? (
+                <div className="space-y-3 rounded-xl border border-indigo-200 bg-white px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <strong className="block text-sm font-semibold text-gray-800">AI 放大倍数</strong>
+                      <span className="mt-1 block text-xs text-gray-500">保持原图颜色，3 倍适合更小图片</span>
+                    </div>
+                    <div className="flex rounded-lg bg-gray-100 p-1">
+                      {[2, 3].map((factor) => (
+                        <button key={factor} type="button" onClick={() => setMobileUpscaleFactor(factor)}
+                          className={`rounded-md px-3 py-1.5 text-xs font-bold ${mobileUpscaleFactor === factor ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500'}`}>
+                          {factor}x
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className={`rounded-lg px-3 py-2 text-xs ${aiModelReady ? 'bg-green-50 text-green-700' : aiModelLoading ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-600'}`}>
+                    {aiModelReady
+                      ? 'AI 模型已在本机启用'
+                      : aiModelLoading
+                        ? '正在下载并启动 AI 模型…'
+                        : '处理时会在本机启动 AI 模型，图片不会上传'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-800">
+                  <p>AI 在每个分块内先做 2 倍细节重建，再还原到原始宽高；不会生成整张 2 倍大图，支持约 1300 万像素以内图片。</p>
+                  <p className={aiModelReady ? 'text-green-700' : aiModelLoading ? 'text-amber-700' : 'text-emerald-700'}>
+                    {aiModelReady
+                      ? 'AI 模型已在本机启用'
+                      : aiModelLoading
+                        ? '正在下载并启动 AI 模型…'
+                        : '处理时会在本机启动 AI 模型，图片不会上传'}
+                  </p>
+                </div>
               )}
 
               <div className={`rounded-xl border px-4 py-3 ${smartSharpen ? 'border-indigo-200 bg-white' : 'border-gray-200 bg-gray-50/60'}`}>
@@ -2169,7 +2215,7 @@ const zipDownloadLockRef = useRef(false)
 
               {processEstimate?.blockReason && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
-                  <strong className="block text-sm">图片太大，建议使用电脑端</strong>
+                  <strong className="block text-sm">当前模式无法安全处理</strong>
                   <span className="mt-1 block">{processEstimate.blockReason}</span>
                 </div>
               )}
