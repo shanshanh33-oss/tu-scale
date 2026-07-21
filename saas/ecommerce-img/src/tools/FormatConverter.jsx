@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle, Copy, Download, FileDown, FolderOpen, Image as ImageIcon, Loader2, Move, RefreshCw, SlidersHorizontal, Upload, X } from 'lucide-react'
 import JSZip from 'jszip'
-import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, revokeObjectUrl, trackEvent } from './shared'
+import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readImage, revokeObjectUrl, trackEvent } from './shared'
+import { decodeInputImage, getInputDecodeErrorMessage } from './heic'
 import RewardButton from './RewardButton'
 
 const OUTPUTS = [
@@ -204,16 +205,15 @@ export default function FormatConverter({ navigate }) {
 
     for (const item of incoming) {
       try {
-        const dataUrl = await readFileAsDataUrl(item.file)
-        const img = await readImage(dataUrl)
-        const target = getTargetSize(preset, customW, customH, img.width, img.height)
+        const decoded = await decodeInputImage(item.file)
+        const target = getTargetSize(preset, customW, customH, decoded.width, decoded.height)
         setItems(prev => prev.map(current => current.id === item.id
-          ? { ...current, preview: dataUrl, width: img.width, height: img.height, crop: getDefaultCropRect(img.width, img.height, target.w, target.h), status: 'ready' }
+          ? { ...current, preview: decoded.preview, width: decoded.width, height: decoded.height, crop: getDefaultCropRect(decoded.width, decoded.height, target.w, target.h), status: 'ready' }
           : current
         ))
-      } catch {
+      } catch (decodeError) {
         setItems(prev => prev.map(current => current.id === item.id
-          ? { ...current, status: 'error', error: '当前浏览器无法解码这种图片格式' }
+          ? { ...current, status: 'error', error: getInputDecodeErrorMessage(decodeError) }
           : current
         ))
       }
@@ -583,6 +583,7 @@ export default function FormatConverter({ navigate }) {
                     <ImageIcon className="w-10 h-10 mb-3 text-indigo-300" />
                     <p className="text-sm font-medium text-gray-600">拖拽图片到这里，或上传图片/文件夹</p>
                     <p className="text-xs mt-1">适合报名照、证件照、网页图、电商图和日常图片压缩</p>
+                    <p className="mt-1 text-[10px] text-gray-400">支持 JPG、PNG、WebP、HEIC/HEIF；HEIC 在浏览器本地解码</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
