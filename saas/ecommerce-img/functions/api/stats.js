@@ -715,7 +715,7 @@ const renderStatsShell = () => `<!doctype html>
         let finalized = 0;
         let skipped = 0;
         while (start <= HISTORICAL_BACKFILL.end) {
-          const end = addDays(start, 2) > HISTORICAL_BACKFILL.end ? HISTORICAL_BACKFILL.end : addDays(start, 2);
+          const end = start;
           message.textContent = '正在补齐 ' + start + ' 至 ' + end + '，请勿关闭此页。';
           const response = await fetch('/api/stats-data', {
             method: 'POST',
