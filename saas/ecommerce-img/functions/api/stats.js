@@ -1,3 +1,5 @@
+import { createAdminSession, getAdminAuth, renderAdminLogin } from './admin-auth.js'
+
 const EVENTS = [
   'page_view',
   'session_start',
@@ -65,17 +67,6 @@ const html = (body, status = 200) => new Response(body, {
     'Cache-Control': 'no-store',
   },
 })
-
-const getStatsToken = (request) => {
-  const authorization = request.headers.get('authorization') || ''
-  if (authorization.startsWith('Bearer ')) return authorization.slice(7).trim()
-  return new URL(request.url).searchParams.get('token') || ''
-}
-
-const isStatsAuthorized = (context) => {
-  const expected = String(context.env.STATS_ADMIN_TOKEN || '')
-  return !expected || getStatsToken(context.request) === expected
-}
 
 const getChinaDate = (offset = 0) => {
   const time = Date.now() + 8 * 60 * 60 * 1000 - offset * 24 * 60 * 60 * 1000
@@ -734,11 +725,12 @@ export async function onRequestGet(context) {
   const wantsJson = requestUrl.searchParams.get('format') === 'json'
   const wantsDebug = requestUrl.searchParams.get('debug') === '1'
 
-  if (!isStatsAuthorized(context)) {
-    const body = { ok: false, error: 'UNAUTHORIZED', message: '需要统计管理口令' }
+  const auth = getAdminAuth(context, 'STATS_ADMIN_TOKEN')
+  if (!auth.authorized) {
+    const body = { ok: false, error: auth.configured ? 'UNAUTHORIZED' : 'ADMIN_TOKEN_NOT_CONFIGURED', message: '需要统计管理口令' }
     return wantsHtml && !wantsJson
-      ? html('<!doctype html><meta charset="utf-8"><title>需要管理口令</title><p>需要有效的统计管理口令。</p>', 401)
-      : json(body, 401)
+      ? html(renderAdminLogin('流量统计看板登录'), auth.configured ? 401 : 503)
+      : json(body, auth.configured ? 401 : 503)
   }
 
   if (wantsHtml && !wantsJson) return html(renderStatsShell())
@@ -825,4 +817,8 @@ export async function onRequestGet(context) {
     }
     return wantsHtml && !wantsJson ? html(renderStatsPage(body), 500) : json(body, 500)
   }
+}
+
+export async function onRequestPost(context) {
+  return createAdminSession(context, 'STATS_ADMIN_TOKEN')
 }

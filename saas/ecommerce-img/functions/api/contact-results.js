@@ -1,3 +1,5 @@
+import { createAdminSession, getAdminAuth, renderAdminLogin } from './admin-auth.js'
+
 const json = (body, status = 200) => new Response(JSON.stringify(body, null, 2), {
   status,
   headers: {
@@ -143,7 +145,7 @@ const renderRows = (records) => {
   }).join('')
 }
 
-const renderDashboard = (payload, { protectedByToken }) => `<!doctype html>
+const renderDashboard = (payload) => `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -212,7 +214,7 @@ const renderDashboard = (payload, { protectedByToken }) => `<!doctype html>
         <h1>TU Scale 联系反馈看板</h1>
         <p class="sub">这里汇总联系页提交的功能建议、问题反馈、格式支持和商务合作线索。优先关注带联系方式和商务合作类型的反馈。</p>
       </div>
-      <div class="pill">${protectedByToken ? '已启用访问 token' : '未设置访问 token'}</div>
+      <div class="pill">已启用管理访问保护</div>
     </div>
 
     <section class="stats">
@@ -233,22 +235,28 @@ const renderDashboard = (payload, { protectedByToken }) => `<!doctype html>
       ${renderRows(payload.recent)}
     </section>
 
-    <p class="hint">建议在 Cloudflare Pages 环境变量中设置 CONTACT_ADMIN_TOKEN，然后使用 /api/contact-results?token=你的口令 访问，避免用户联系方式被公开看到。</p>
+    <p class="hint">此看板仅限授权管理人员访问。请勿通过网址传递或分享管理口令。</p>
   </main>
 </body>
 </html>`
 
-const unauthorized = () => html(`<!doctype html><meta charset="utf-8"><title>需要访问口令</title><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f8fb;color:#172033;margin:0;padding:40px"><main style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #dbe3ef;border-radius:16px;padding:24px;box-shadow:0 16px 42px rgba(15,23,42,.08)"><h1 style="margin:0 0 10px;font-size:24px">需要访问口令</h1><p style="color:#64748b;line-height:1.7">请在地址后追加 <strong>?token=你的口令</strong>。口令来自 Cloudflare Pages 环境变量 CONTACT_ADMIN_TOKEN。</p></main></body>`, 401)
-
 export async function onRequestGet(context) {
   const kv = context.env.TUSCALE_ANALYTICS
   const url = new URL(context.request.url)
-  const token = context.env.CONTACT_ADMIN_TOKEN
+  const wantsJson = url.searchParams.get('format') === 'json'
+  const auth = getAdminAuth(context, 'CONTACT_ADMIN_TOKEN')
 
-  if (token && url.searchParams.get('token') !== token) return unauthorized()
+  if (!auth.authorized) {
+    const body = { ok: false, error: auth.configured ? 'UNAUTHORIZED' : 'ADMIN_TOKEN_NOT_CONFIGURED' }
+    return wantsJson ? json(body, auth.configured ? 401 : 503) : html(renderAdminLogin('联系反馈看板登录'), auth.configured ? 401 : 503)
+  }
   if (!kv) return json({ ok: false, configured: false }, 202)
 
   const payload = await buildPayload(kv)
-  if (url.searchParams.get('format') === 'json') return json(payload)
-  return html(renderDashboard(payload, { protectedByToken: Boolean(token) }))
+  if (wantsJson) return json(payload)
+  return html(renderDashboard(payload))
+}
+
+export async function onRequestPost(context) {
+  return createAdminSession(context, 'CONTACT_ADMIN_TOKEN')
 }

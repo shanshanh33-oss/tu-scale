@@ -1,3 +1,5 @@
+import { createAdminSession, getAdminAuth, renderAdminLogin } from './admin-auth.js'
+
 const json = (body, status = 200) => new Response(JSON.stringify(body, null, 2), {
   status,
   headers: {
@@ -227,7 +229,7 @@ const renderDashboard = (payload) => {
       </div>
     </section>
 
-    <p class="hint">提示：这个页面目前未加密码保护。正式公开推广前，建议加后台访问 token。</p>
+    <p class="hint">此看板仅限授权管理人员访问。请勿通过网址传递或分享管理口令。</p>
   </main>
 </body>
 </html>`
@@ -237,6 +239,12 @@ export async function onRequestGet(context) {
   const kv = context.env.TUSCALE_ANALYTICS
   const url = new URL(context.request.url)
   const wantsJson = url.searchParams.get('format') === 'json'
+  const auth = getAdminAuth(context, 'CONTACT_ADMIN_TOKEN')
+
+  if (!auth.authorized) {
+    const body = { ok: false, error: auth.configured ? 'UNAUTHORIZED' : 'ADMIN_TOKEN_NOT_CONFIGURED' }
+    return wantsJson ? json(body, auth.configured ? 401 : 503) : html(renderAdminLogin('需求反馈看板登录'), auth.configured ? 401 : 503)
+  }
 
   if (!kv) {
     const body = { ok: false, configured: false }
@@ -251,4 +259,8 @@ export async function onRequestGet(context) {
 
   const payload = await buildPayload(kv)
   return wantsJson ? json(payload) : html(renderDashboard(payload))
+}
+
+export async function onRequestPost(context) {
+  return createAdminSession(context, 'CONTACT_ADMIN_TOKEN')
 }
