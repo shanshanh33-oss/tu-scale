@@ -22,6 +22,7 @@ const METRICS = [...EVENTS, 'unique_visitor']
 const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
 const PAGE_SIZE = 1000
 const MAX_SETTLEMENT_PAGES = 20
+const MAX_BACKFILL_DAYS = 31
 const STATS_START_DATE = '2026-06-28'
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -40,6 +41,17 @@ const getChinaDate = (offset = 0) => {
 const getDailySummaryKey = (day) => `daily-summary:${day}`
 
 const isValidDay = (day) => /^\d{4}-\d{2}-\d{2}$/.test(day)
+
+const listDays = (start, end) => {
+  const days = []
+  const cursor = new Date(`${start}T00:00:00.000Z`)
+  const last = new Date(`${end}T00:00:00.000Z`)
+  while (cursor <= last) {
+    days.push(cursor.toISOString().slice(0, 10))
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+  return days
+}
 
 const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]))
 
@@ -247,4 +259,48 @@ export async function onRequestGet(context) {
     complete: true,
     summary: await toPublicSummary(day, createSummary()),
   })
+}
+
+export async function onRequestPost(context) {
+  const auth = getAdminAuth(context, 'STATS_ADMIN_TOKEN')
+  if (!auth.authorized) return json({ ok: false, error: auth.configured ? 'UNAUTHORIZED' : 'ADMIN_TOKEN_NOT_CONFIGURED' }, auth.configured ? 401 : 503)
+
+  const kv = context.env.TUSCALE_ANALYTICS
+  if (!kv) return json({ ok: false, configured: false }, 202)
+
+  let body
+  try {
+    body = await context.request.json()
+  } catch {
+    return json({ ok: false, error: 'INVALID_JSON' }, 400)
+  }
+
+  const start = String(body?.start || STATS_START_DATE)
+  const end = String(body?.end || getChinaDate(1))
+  const yesterday = getChinaDate(1)
+  if (!isValidDay(start) || !isValidDay(end) || start < STATS_START_DATE || end < start || end > yesterday) {
+    return json({ ok: false, error: 'INVALID_BACKFILL_RANGE' }, 400)
+  }
+
+  const days = listDays(start, end)
+  if (days.length > MAX_BACKFILL_DAYS) return json({ ok: false, error: 'BACKFILL_RANGE_TOO_LARGE' }, 400)
+
+  const finalized = []
+  const skipped = []
+  try {
+    for (const day of days) {
+      const existing = await readDailySummary(kv, day)
+      if (existing) {
+        skipped.push(day)
+        continue
+      }
+      const summary = await settleDay(kv, day)
+      finalized.push({ day, eventLogCount: summary.eventLogCount })
+    }
+  } catch (error) {
+    console.error('Stats historical backfill failed', error)
+    return json({ ok: false, error: 'BACKFILL_FAILED', completedDays: finalized.map((item) => item.day) }, 503)
+  }
+
+  return json({ ok: true, start, end, finalized, skipped })
 }

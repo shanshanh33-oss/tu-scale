@@ -547,6 +547,9 @@ const renderStatsShell = () => `<!doctype html>
     .bar i { display:block; height:100%; border-radius:inherit; background:var(--accent); }
     .note { margin-top:14px; font-size:13px; color:var(--muted); }
     .anomaly { display:block; margin-top:4px; color:#b45309; font-size:11px; font-weight:600; white-space:normal; }
+    .backfill { display:flex; align-items:center; gap:12px; margin:0 0 18px; padding:13px 16px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1e3a8a; font-size:14px; }
+    .backfill button { flex:0 0 auto; padding:8px 11px; border:0; border-radius:7px; background:var(--accent); color:#fff; font:inherit; font-weight:650; cursor:pointer; }
+    .backfill button:disabled { cursor:wait; opacity:.65; }
     @media (max-width:760px) { main { width:min(100% - 24px,1120px); padding-top:22px; } header, .section-head { display:block; } .status { margin-top:14px; } .metrics { grid-template-columns:1fr; } th, td { padding:11px 14px; } }
   </style>
 </head>
@@ -559,6 +562,7 @@ const renderStatsShell = () => `<!doctype html>
       </div>
       <span id="status" class="status">正在读取</span>
     </header>
+    <div class="backfill"><span id="backfillMessage">可补齐 2026-06-28 至 2026-07-15 尚未生成的历史汇总。</span><button id="backfill" type="button">补齐历史汇总</button></div>
     <div id="metrics" class="metrics"></div>
     <section>
       <div class="section-head"><h2>访问版本</h2><p>自 2026-07-18 起按匿名事件区分电脑版与手机版。</p></div>
@@ -597,6 +601,7 @@ const renderStatsShell = () => `<!doctype html>
     const BUSINESS_FIELDS = ['edition', ...Object.keys(BUSINESS_LABELS)];
     const emptyBusiness = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]));
     const STATS_START_DATE = '${STATS_START_DATE}';
+    const HISTORICAL_BACKFILL = { start: '2026-06-28', end: '2026-07-15' };
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
     const sum = (source, events) => events.reduce((total, event) => total + (source[event] || 0), 0);
     const percent = (value, total) => total ? Math.round((value / total) * 100) + '%' : '0%';
@@ -693,6 +698,28 @@ const renderStatsShell = () => `<!doctype html>
       const pendingDays = days.filter((day) => day.settlementStatus === 'pending').length;
       document.getElementById('note').textContent = '口径说明：当天事件会在次日首次查看统计时结算为每日汇总，避免反复扫描原始日志。当前已结算 ' + fmt(finalizedDays) + ' 天，等待历史汇总 ' + fmt(pendingDays) + ' 天。成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已结算原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
     };
+
+    document.getElementById('backfill').addEventListener('click', async () => {
+      const button = document.getElementById('backfill');
+      const message = document.getElementById('backfillMessage');
+      if (!window.confirm('将读取现有原始事件，并为 2026-06-28 至 2026-07-15 缺失的日期写入每日汇总。原始事件不会被修改或删除。是否继续？')) return;
+      button.disabled = true;
+      message.textContent = '正在补齐历史汇总，请勿关闭此页。';
+      try {
+        const response = await fetch('/api/stats-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(HISTORICAL_BACKFILL),
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error || 'BACKFILL_FAILED');
+        message.textContent = '已补齐 ' + data.finalized.length + ' 天；原已结算 ' + data.skipped.length + ' 天。正在刷新统计。';
+        window.location.reload();
+      } catch (error) {
+        message.textContent = '历史汇总补齐失败：' + (error?.message || error);
+        button.disabled = false;
+      }
+    });
 
     (async () => {
       const status = document.getElementById('status');
