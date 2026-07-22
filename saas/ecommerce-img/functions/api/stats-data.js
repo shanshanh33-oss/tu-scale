@@ -23,6 +23,7 @@ const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
 const PAGE_SIZE = 1000
 const MAX_SETTLEMENT_PAGES = 20
 const MAX_BACKFILL_DAYS = 1
+const LEGACY_READ_CONCURRENCY = 25
 const STATS_START_DATE = '2026-06-28'
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -166,6 +167,7 @@ const settleDay = async (kv, day) => {
     pageCount += 1
     if (pageCount > MAX_SETTLEMENT_PAGES) throw new Error('Daily settlement is too large')
 
+    const legacyKeys = []
     for (const key of listed.keys || []) {
       summary.eventLogCount += 1
       const metadataEvents = getMetadataEvents(key.metadata)
@@ -174,14 +176,20 @@ const settleDay = async (kv, day) => {
         summary.metadataReadCount += 1
         continue
       }
+      legacyKeys.push(key.name)
+    }
 
-      const value = await kv.get(key.name)
-      summary.legacyReadCount += 1
-      try {
-        getRecordEvents(JSON.parse(value || '{}')).forEach((item) => addEvent(summary, item))
-      } catch {
-        // Broken analytics records are ignored so one bad row cannot break settlement.
-      }
+    for (let offset = 0; offset < legacyKeys.length; offset += LEGACY_READ_CONCURRENCY) {
+      const names = legacyKeys.slice(offset, offset + LEGACY_READ_CONCURRENCY)
+      const values = await Promise.all(names.map((name) => kv.get(name)))
+      summary.legacyReadCount += values.length
+      values.forEach((value) => {
+        try {
+          getRecordEvents(JSON.parse(value || '{}')).forEach((item) => addEvent(summary, item))
+        } catch {
+          // Broken analytics records are ignored so one bad row cannot break settlement.
+        }
+      })
     }
     cursor = listed.list_complete ? '' : listed.cursor
   } while (cursor)
