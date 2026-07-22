@@ -1,3 +1,5 @@
+import { getAdminAuth } from './admin-auth.js'
+
 const EVENTS = [
   'page_view',
   'session_start',
@@ -51,17 +53,6 @@ const normalizeEvent = (event) => EVENTS.includes(event) ? event : ''
 const normalizeTool = (tool) => {
   if (tool === 'compressor') return 'converter'
   return TOOLS.includes(tool) ? tool : 'unknown'
-}
-
-const getStatsToken = (request) => {
-  const authorization = request.headers.get('authorization') || ''
-  if (authorization.startsWith('Bearer ')) return authorization.slice(7).trim()
-  return new URL(request.url).searchParams.get('token') || ''
-}
-
-const isStatsAuthorized = (context) => {
-  const expected = String(context.env.STATS_ADMIN_TOKEN || '')
-  return !expected || getStatsToken(context.request) === expected
 }
 
 const hashVisitorIds = async (day, ids) => {
@@ -195,7 +186,8 @@ const settleDay = async (kv, day) => {
 }
 
 export async function onRequestGet(context) {
-  if (!isStatsAuthorized(context)) return json({ ok: false, error: 'UNAUTHORIZED' }, 401)
+  const auth = getAdminAuth(context, 'STATS_ADMIN_TOKEN')
+  if (!auth.authorized) return json({ ok: false, error: auth.configured ? 'UNAUTHORIZED' : 'ADMIN_TOKEN_NOT_CONFIGURED' }, auth.configured ? 401 : 503)
 
   const kv = context.env.TUSCALE_ANALYTICS
   if (!kv) return json({ ok: false, configured: false }, 202)

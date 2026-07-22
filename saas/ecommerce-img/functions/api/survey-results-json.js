@@ -1,3 +1,5 @@
+import { getAdminAuth } from './admin-auth.js'
+
 const json = (body, status = 200) => new Response(JSON.stringify(body, null, 2), {
   status,
   headers: {
@@ -24,6 +26,9 @@ const readKvList = async (kv, prefix, maxKeys = 1000) => {
 }
 
 export async function onRequestGet(context) {
+  const auth = getAdminAuth(context, 'CONTACT_ADMIN_TOKEN')
+  if (!auth.authorized) return json({ ok: false, error: auth.configured ? 'UNAUTHORIZED' : 'ADMIN_TOKEN_NOT_CONFIGURED' }, auth.configured ? 401 : 503)
+
   const kv = context.env.TUSCALE_ANALYTICS
   if (!kv) return json({ ok: false, configured: false }, 202)
 
