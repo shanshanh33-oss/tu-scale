@@ -602,6 +602,11 @@ const renderStatsShell = () => `<!doctype html>
     const emptyBusiness = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]));
     const STATS_START_DATE = '${STATS_START_DATE}';
     const HISTORICAL_BACKFILL = { start: '2026-06-28', end: '2026-07-15' };
+    const addDays = (day, amount) => {
+      const date = new Date(day + 'T00:00:00.000Z');
+      date.setUTCDate(date.getUTCDate() + amount);
+      return date.toISOString().slice(0, 10);
+    };
     const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
     const sum = (source, events) => events.reduce((total, event) => total + (source[event] || 0), 0);
     const percent = (value, total) => total ? Math.round((value / total) * 100) + '%' : '0%';
@@ -706,14 +711,24 @@ const renderStatsShell = () => `<!doctype html>
       button.disabled = true;
       message.textContent = '正在补齐历史汇总，请勿关闭此页。';
       try {
-        const response = await fetch('/api/stats-data', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(HISTORICAL_BACKFILL),
-        });
-        const data = await response.json();
-        if (!data.ok) throw new Error(data.error || 'BACKFILL_FAILED');
-        message.textContent = '已补齐 ' + data.finalized.length + ' 天；原已结算 ' + data.skipped.length + ' 天。正在刷新统计。';
+        let start = HISTORICAL_BACKFILL.start;
+        let finalized = 0;
+        let skipped = 0;
+        while (start <= HISTORICAL_BACKFILL.end) {
+          const end = addDays(start, 2) > HISTORICAL_BACKFILL.end ? HISTORICAL_BACKFILL.end : addDays(start, 2);
+          message.textContent = '正在补齐 ' + start + ' 至 ' + end + '，请勿关闭此页。';
+          const response = await fetch('/api/stats-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ start, end }),
+          });
+          const data = await response.json();
+          if (!data.ok) throw new Error(data.error || 'BACKFILL_FAILED');
+          finalized += data.finalized.length;
+          skipped += data.skipped.length;
+          start = addDays(end, 1);
+        }
+        message.textContent = '已补齐 ' + finalized + ' 天；原已结算 ' + skipped + ' 天。正在刷新统计。';
         window.location.reload();
       } catch (error) {
         message.textContent = '历史汇总补齐失败：' + (error?.message || error);

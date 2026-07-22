@@ -22,7 +22,7 @@ const METRICS = [...EVENTS, 'unique_visitor']
 const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
 const PAGE_SIZE = 1000
 const MAX_SETTLEMENT_PAGES = 20
-const MAX_BACKFILL_DAYS = 31
+const MAX_BACKFILL_DAYS = 3
 const STATS_START_DATE = '2026-06-28'
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
