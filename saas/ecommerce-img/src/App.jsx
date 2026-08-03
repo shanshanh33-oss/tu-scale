@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useRef, useMemo, useCallback, useEffect } from 'react'
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy } from 'lucide-react'
 import JSZip from 'jszip'
 import { loadModel, processWithAI, isModelLoaded } from './ai/waifu2x'
@@ -6,10 +6,9 @@ import FormatConverter from './tools/FormatConverter'
 import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
 import BackgroundTool from './tools/BackgroundTool'
+import MoireMaskEditor from './tools/MoireMaskEditor'
 import { trackEvent } from './tools/shared'
 import { decodeInputImage, getInputDecodeErrorMessage, isHeicFile } from './tools/heic'
-
-const VectorizerTool = lazy(() => import('./tools/VectorizerTool'))
 
 const QUALITY_PRESETS = [
   { edge: 1080, label: '1080级', desc: '最长边 1080px' },
@@ -232,9 +231,10 @@ const PAGE_META = {
   const [aiUpscale, setAiUpscale] = useState(false)
   const [aiDetailMode, setAiDetailMode] = useState('preserve')
   const [reduceArtifacts, setReduceArtifacts] = useState(false)
-  const [reduceMoire, setReduceMoire] = useState(false)
-  const [moireStrength, setMoireStrength] = useState('medium')
-  const [smartTextDescreen, setSmartTextDescreen] = useState(false)
+  const [localizedChromaMoire, setLocalizedChromaMoire] = useState(false)
+  const [hasLocalizedMoireMask, setHasLocalizedMoireMask] = useState(false)
+  const [repairColorFringes, setRepairColorFringes] = useState(false)
+  const [colorFringeStrength, setColorFringeStrength] = useState('standard')
   const [faceAwareProtection, setFaceAwareProtection] = useState(true)
   const [faceSkinStrength, setFaceSkinStrength] = useState(60)
   const [deblur, setDeblur] = useState(false)
@@ -325,6 +325,7 @@ const PAGE_META = {
   const [dragOverIdx, setDragOverIdx] = useState(null)
 
   const fileRef = useRef(null)
+  const localizedMoireMaskCanvasRef = useRef(null)
   const folderRef = useRef(null)
   const cropStageRef = useRef(null)
 
@@ -415,9 +416,8 @@ const zipDownloadLockRef = useRef(false)
         if (s.aiUpscale !== undefined) setAiUpscale(s.aiUpscale)
         if (s.aiDetailMode === 'strong' || s.aiDetailMode === 'preserve') setAiDetailMode(s.aiDetailMode)
         if (s.reduceArtifacts !== undefined) setReduceArtifacts(s.reduceArtifacts)
-        if (s.reduceMoire !== undefined) setReduceMoire(s.reduceMoire)
-        if (['light', 'medium', 'strong'].includes(s.moireStrength)) setMoireStrength(s.moireStrength)
-        if (s.smartTextDescreen !== undefined) setSmartTextDescreen(s.smartTextDescreen)
+        if (s.repairColorFringes !== undefined) setRepairColorFringes(s.repairColorFringes)
+        if (['light', 'standard', 'strong'].includes(s.colorFringeStrength)) setColorFringeStrength(s.colorFringeStrength)
         if (s.faceAwareProtection !== undefined) setFaceAwareProtection(s.faceAwareProtection)
         if (Number.isFinite(s.faceSkinStrength)) setFaceSkinStrength(Math.max(0, Math.min(100, s.faceSkinStrength)))
         if (s.deblur !== undefined) setDeblur(s.deblur)
@@ -442,10 +442,10 @@ const zipDownloadLockRef = useRef(false)
   // --- 保存设置到 localStorage ---
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
+      scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
       keepRatio, customW, customH, fileNameTemplate
     }))
-  }, [scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
+  }, [scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
 
   // --- 单图模式 effect ---
   useEffect(() => {
@@ -459,7 +459,7 @@ const zipDownloadLockRef = useRef(false)
     })
     setCompareSourceDims(null)
     setProcessStage('')
-  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, contentType, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, cropEnabled, cropRect])
+  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, contentType, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, cropEnabled, cropRect])
 
   // --- 单图文件处理 ---
   const handleFile = useCallback(async (f) => {
@@ -469,6 +469,8 @@ const zipDownloadLockRef = useRef(false)
       setFile(f)
       setPreview(null)
       setOrigDims(null)
+      localizedMoireMaskCanvasRef.current = null
+      setHasLocalizedMoireMask(false)
       setInputDecoding(isHeicFile(f))
       setResult(null)
       setResultDims(null)
@@ -511,6 +513,8 @@ const zipDownloadLockRef = useRef(false)
       inputDecodeIdRef.current += 1
       setInputDecoding(false)
       setFile(null); setPreview(null); setOrigDims(null)
+      localizedMoireMaskCanvasRef.current = null
+      setHasLocalizedMoireMask(false)
       setResult(null); setResultDims(null); setResultSize(null); setCompareSource(null); setCompareSourceDims(null); setProcessStage(''); setError(null)
     }, [])
 
@@ -594,12 +598,19 @@ const zipDownloadLockRef = useRef(false)
     setResult(null)
     setResultDims(null)
     setResultSize(null)
-    revokeObjectUrl(compareSource)
-    setCompareSource(null)
+    setCompareSource(previous => {
+      revokeObjectUrl(previous)
+      return null
+    })
     setCompareSourceDims(null)
     setProcessStage('')
     setError(null)
-  }, [compareSource])
+  }, [])
+
+  const handleLocalizedMoireMaskChange = useCallback((hasMask) => {
+    setHasLocalizedMoireMask(hasMask)
+    resetResultState()
+  }, [resetResultState])
 
   const applyCropPreset = useCallback((presetId) => {
     const preset = CROP_PRESETS.find(item => item.id === presetId) || CROP_PRESETS[0]
@@ -627,6 +638,8 @@ const zipDownloadLockRef = useRef(false)
     setFile(null)
     setPreview(null)
     setOrigDims(null)
+    localizedMoireMaskCanvasRef.current = null
+    setHasLocalizedMoireMask(false)
     setResult(null)
     setResultDims(null)
     setResultSize(null)
@@ -1015,9 +1028,31 @@ const zipDownloadLockRef = useRef(false)
             srcCtx.drawImage(tempCanvas, 0, 0)
           }
 
-          // 在放大前先减少源图中的压缩色块和周期纹理，避免后续重采样放大这些伪影。
+          if (!isTextMode && doEnhance.localizedChromaMoire && doEnhance.localizedMoireMask) {
+            const sourceData = srcCtx.getImageData(0, 0, sourceW, sourceH)
+            onStage?.('修复涂抹区域的彩色摩尔纹')
+            const sourceMask = doEnhance.localizedMoireMask
+            const maskCanvas = document.createElement('canvas')
+            maskCanvas.width = sourceW
+            maskCanvas.height = sourceH
+            const maskCtx = maskCanvas.getContext('2d')
+            const maskX = sourceX / img.width * sourceMask.width
+            const maskY = sourceY / img.height * sourceMask.height
+            const maskW = sourceW / img.width * sourceMask.width
+            const maskH = sourceH / img.height * sourceMask.height
+            maskCtx.drawImage(sourceMask, maskX, maskY, maskW, maskH, 0, 0, sourceW, sourceH)
+            const maskData = maskCtx.getImageData(0, 0, sourceW, sourceH)
+            const { applyLocalizedChromaMoireFilter } = await import('./ai/localizedChromaMoire')
+            const repaired = applyLocalizedChromaMoireFilter(
+              sourceData,
+              maskData,
+            )
+            srcCtx.putImageData(repaired, 0, 0)
+          }
+
+          // 照片模式可选地减少 JPEG 色块；文字模式保持其内置文字清理流程。
           let faceSkinMask = null
-          if (doEnhance.reduceArtifacts || doEnhance.reduceMoire || (isTextMode && doEnhance.smartTextDescreen)) {
+          if (!isTextMode && doEnhance.reduceArtifacts) {
             let sourceData = srcCtx.getImageData(0, 0, sourceW, sourceH)
             if (useFaceProtection) {
               onStage?.('检测人脸与皮肤区域')
@@ -1035,36 +1070,6 @@ const zipDownloadLockRef = useRef(false)
                 useFaceProtection ? faceSkinMask : null,
                 doEnhance.faceSkinStrength,
               )
-            }
-            if (isTextMode && doEnhance.smartTextDescreen) {
-              onStage?.('识别文字轮廓与重复屏纹')
-              sourceData = smartTextDescreenFilter(sourceData)
-            } else if (doEnhance.reduceMoire) {
-              if (isTextMode) {
-                const strengthLabel = doEnhance.moireStrength === 'strong' ? '强力' : doEnhance.moireStrength === 'light' ? '轻度' : '中度'
-                onStage?.(`抑制屏幕摩尔纹（${strengthLabel}）`)
-                sourceData = screenMoireReductionFilter(sourceData, doEnhance.moireStrength || 'medium')
-              } else {
-                // 照片模式仅处理检测到明确方向和周期的局部重复纹理。
-                const adaptiveStrength = doEnhance.moireStrength === 'strong' ? 1 : doEnhance.moireStrength === 'light' ? 0.52 : 0.75
-                try {
-                  const { adaptiveMoireReductionFilter } = await import('./ai/adaptiveMoire')
-                  sourceData = adaptiveMoireReductionFilter(
-                    sourceData,
-                    adaptiveStrength,
-                    useFaceProtection ? faceSkinMask : null,
-                    doEnhance.faceSkinStrength,
-                  )
-                } catch (adaptiveError) {
-                  console.warn('Adaptive moire filter unavailable, using the standard filter.', adaptiveError)
-                  sourceData = moireReductionFilter(
-                    sourceData,
-                    adaptiveStrength,
-                    useFaceProtection ? faceSkinMask : null,
-                    doEnhance.faceSkinStrength,
-                  )
-                }
-              }
             }
             srcCtx.putImageData(sourceData, 0, 0)
           }
@@ -1109,6 +1114,19 @@ const zipDownloadLockRef = useRef(false)
             dstCtx.imageSmoothingEnabled = true
             dstCtx.imageSmoothingQuality = 'high'
             dstCtx.drawImage(aiCanvas, 0, 0, targetW, targetH)
+
+            if (!isTextMode && doEnhance.repairColorFringes) {
+              onStage?.('修复放大色边')
+              const { repairUpscaleColorFringes } = await import('./ai/edgeChromaCleanup')
+              const repairStrength = doEnhance.colorFringeStrength === 'strong'
+                ? 0.78
+                : doEnhance.colorFringeStrength === 'light' ? 0.35 : 0.55
+              const repaired = repairUpscaleColorFringes(
+                dstCtx.getImageData(0, 0, targetW, targetH),
+                repairStrength,
+              )
+              dstCtx.putImageData(repaired, 0, 0)
+            }
 
             if (doEnhance.smartSharpen) {
               const imageData = dstCtx.getImageData(0, 0, targetW, targetH)
@@ -1412,6 +1430,9 @@ const zipDownloadLockRef = useRef(false)
   }
 
   // --- 智能文字去屏纹：检测固定周期和方向，只从净化层恢复文字结构，避免把栅格重新锐化回来 ---
+  // Kept private while the text-only control is retired, so this large legacy
+  // routine can be removed separately without touching the active image path.
+  // eslint-disable-next-line no-unused-vars
   const smartTextDescreenFilter = (imageData) => {
     const { data, width, height } = imageData
     const clamp01 = value => Math.max(0, Math.min(1, value))
@@ -1715,6 +1736,7 @@ const zipDownloadLockRef = useRef(false)
   }
 
   // --- 照片抗摩尔纹（多尺度抑制平缓区域的细密周期纹理，保留强边缘）---
+  // eslint-disable-next-line no-unused-vars
   const moireReductionFilter = (imageData, strength = 0.65, faceSkinMask = null, skinStrength = 0.6) => {
     const { data, width, height } = imageData
     const output = new Uint8ClampedArray(data)
@@ -1887,7 +1909,26 @@ const zipDownloadLockRef = useRef(false)
           return compareRes.dataUrl
         })
         setCompareSourceDims({ w: compareRes.width, h: compareRes.height })
-        const res = await processImageWithCanvas(preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, setProcessStage)
+        const res = await processImageWithCanvas(preview, targetW, targetH, {
+          contentType,
+          smartSharpen,
+          aiUpscale,
+          aiDetailMode,
+          reduceArtifacts,
+          localizedChromaMoire: localizedChromaMoire && hasLocalizedMoireMask,
+          localizedMoireMask: localizedMoireMaskCanvasRef.current,
+          repairColorFringes,
+          colorFringeStrength,
+          faceAwareProtection,
+          faceSkinStrength: faceSkinStrength / 100,
+          deblur,
+          autoLevels,
+          vibrance,
+          clahe,
+          smartDenoise,
+          edgeInterpolation,
+          antiAlias,
+        }, format, cropOptions, setProcessStage)
         setProgress(95)
         setProcessStage('导出结果')
         await new Promise(r => setTimeout(r, 100))
@@ -1921,7 +1962,7 @@ const zipDownloadLockRef = useRef(false)
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, hasLocalizedMoireMask, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -1971,7 +2012,7 @@ const zipDownloadLockRef = useRef(false)
           await ensureAiModel()
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
           const updateItemStage = (stage) => setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage } : it))
-          const res = await processImageWithCanvas(item.preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, updateItemStage)
+          const res = await processImageWithCanvas(item.preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias }, format, cropOptions, updateItemStage)
         clearInterval(timer)
 
         const sizeKB = res.size < 1024 * 1024
@@ -2010,7 +2051,7 @@ const zipDownloadLockRef = useRef(false)
 
     batchCancelRef.current = false
     setBatchProcessing(false)
-  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, reduceMoire, moireStrength, smartTextDescreen, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, aiInputLimits, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, edgeInterpolation, antiAlias, aiInputLimits, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 单图下载 ---
   const handleDownload = () => {
@@ -2128,11 +2169,6 @@ const zipDownloadLockRef = useRef(false)
   }, [])
 
   if (route === '/format-converter') return <FormatConverter navigate={navigate} />
-  if (route === '/vectorizer') return (
-    <Suspense fallback={<PageLoading label="正在加载图片转 SVG 工具…" />}>
-      <VectorizerTool navigate={navigate} />
-    </Suspense>
-  )
   if (route === '/product-image') return <BackgroundTool navigate={navigate} />
   if (route === '/contact') return <ContactPage navigate={navigate} />
 
@@ -2663,69 +2699,27 @@ const zipDownloadLockRef = useRef(false)
                 )}
               </div>
 
-              <div className="border-t border-gray-100 pt-3">
-                <div className="text-xs font-medium text-gray-500 mb-2">放大前净化</div>
-                <p className="mb-2 text-[11px] leading-5 text-amber-700">
-                  请按原图问题选择：没有明显色块、屏纹或摩尔纹时建议保持关闭；不必要的净化可能削弱纹理与细节。
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {contentType === 'photo' && (
+                <div className="border-t border-gray-100 pt-3">
+                  <div className="text-xs font-medium text-gray-500 mb-2">放大前净化</div>
+                  <p className="mb-2 text-[11px] leading-5 text-amber-700">
+                    没有明显 JPEG 色块时建议保持关闭；不必要的净化可能削弱纹理与细节。
+                  </p>
+                  <div className="grid grid-cols-1 gap-2">
                   <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                     <input type="checkbox" checked={reduceArtifacts}
                       onChange={(e) => setReduceArtifacts(e.target.checked)}
                       className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
                     <span><strong className="font-semibold text-gray-700">减少色块/伪影</strong><span className="mt-0.5 block leading-4 text-gray-400">放大前减轻 JPEG 压缩色块和细小噪声。</span></span>
                   </label>
-                  <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
-                    <input type="checkbox" checked={reduceMoire}
-                      onChange={(e) => setReduceMoire(e.target.checked)}
-                      className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
-                    <span><strong className="font-semibold text-gray-700">抗摩尔纹</strong><span className="mt-0.5 block leading-4 text-gray-400">放大前抑制衣物、屏幕等区域的细密周期纹理。</span></span>
-                  </label>
-                  {contentType === 'text' && (
-                    <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none sm:col-span-2">
-                      <input type="checkbox" checked={smartTextDescreen}
-                        onChange={(e) => setSmartTextDescreen(e.target.checked)}
-                        className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
-                      <span>
-                        <strong className="font-semibold text-indigo-700">智能去屏纹（文字保护）</strong>
-                        <span className="mt-0.5 block leading-4 text-gray-400">自动识别固定方向和间距的重复屏纹，从净化后的结构层恢复文字轮廓，适合拍摄显示器、电视和 LED 屏幕。</span>
-                      </span>
-                    </label>
-                  )}
-                  {contentType === 'photo' && (
-                    <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none sm:col-span-2">
+                    <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                       <input type="checkbox" checked={faceAwareProtection}
                         onChange={(e) => setFaceAwareProtection(e.target.checked)}
                         className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
                       <span><strong className="font-semibold text-indigo-700">人脸智能保护</strong><span className="mt-0.5 block leading-4 text-gray-400">单独控制是否加载本地人脸模型。开启后保护五官线条，并把净化重点放在皮肤区域；关闭后使用普通全图处理。</span></span>
                     </label>
-                  )}
-                </div>
-                {reduceMoire && !(contentType === 'text' && smartTextDescreen) && (
-                  <div className="mt-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold text-gray-700">抗摩尔纹强度</span>
-                      <div className="inline-grid grid-cols-3 gap-1 rounded-lg bg-gray-50 p-1">
-                        {[
-                          ['light', '轻度'],
-                          ['medium', '中度'],
-                          ['strong', '强力'],
-                        ].map(([id, label]) => (
-                          <button key={id} type="button" onClick={() => setMoireStrength(id)} aria-pressed={moireStrength === id}
-                            className={`rounded-md px-3 py-1 text-[10px] font-semibold transition-colors ${moireStrength === id ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}>
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <p className="mt-1.5 text-[10px] leading-4 text-gray-400">
-                      {contentType === 'text'
-                        ? '拍摄屏幕建议先用中度；竖纹或彩色波纹仍明显时改用强力，文字略软可改回中度或小幅提高锐化。'
-                        : '照片建议从轻度开始；强力模式可能削弱衣物、头发等真实细节。'}
-                    </p>
                   </div>
-                )}
-                {contentType === 'photo' && faceAwareProtection && (
+                  {faceAwareProtection && (
                   <div className="mt-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
                     <div className="flex items-center justify-between gap-3">
                       <label htmlFor="face-skin-strength" className="text-[11px] font-semibold text-gray-700">皮肤净化程度</label>
@@ -2735,25 +2729,54 @@ const zipDownloadLockRef = useRef(false)
                     </div>
                     <input id="face-skin-strength" type="range" min="0" max="100" step="5" value={faceSkinStrength}
                       aria-label="皮肤净化程度"
-                      disabled={!reduceArtifacts && !reduceMoire}
+                      disabled={!reduceArtifacts}
                       onChange={(e) => setFaceSkinStrength(Number(e.target.value))}
                       className="mt-2 h-1.5 w-full accent-indigo-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" />
-                    <div className="mt-1 flex justify-between text-[9px] text-gray-400"><span>更多保留肤质</span><span>更强抑制色块/摩尔纹</span></div>
+                    <div className="mt-1 flex justify-between text-[9px] text-gray-400"><span>更多保留肤质</span><span>更强减少色块</span></div>
                     <p className="mt-1.5 text-[10px] leading-4 text-gray-400">
-                      {!reduceArtifacts && !reduceMoire
-                        ? '请先开启“减少色块/伪影”或“抗摩尔纹”，滑杆才会参与处理。'
+                      {!reduceArtifacts
+                        ? '请先开启“减少色块/伪影”，滑杆才会参与处理。'
                         : '低程度优先保留肤质，高程度扩大处理范围并降低皮肤区域的重复锐化；五官线条仍保持清晰。'}
                     </p>
                   </div>
                 )}
-                {contentType === 'text' && (
-                  <p className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[10px] leading-4 text-amber-700">
-                    {smartTextDescreen
-                      ? '智能去屏纹会优先处理，不与普通抗摩尔纹叠加。处理大图时会更慢；如果原笔画已被屏纹完全覆盖，只能近似恢复。'
-                      : '文字模式不会加载人脸模型。清晰截图通常无需额外净化；JPEG 色块明显时可开启“减少色块/伪影”，拍摄屏幕出现细密纹理时可开启“抗摩尔纹”。'}
-                  </p>
-                )}
-              </div>
+                </div>
+              )}
+
+              {!batchMode && contentType === 'photo' && (
+                <div className="border-t border-gray-100 pt-3">
+                  <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2.5 text-[11px] text-gray-600 cursor-pointer select-none">
+                    <input type="checkbox" checked={localizedChromaMoire}
+                      onChange={(event) => setLocalizedChromaMoire(event.target.checked)}
+                      className="mt-0.5 h-3.5 w-3.5 rounded border-gray-300 text-indigo-500" />
+                    <span>
+                      <strong className="font-semibold text-indigo-700">彩色摩尔纹修复（测试版）</strong>
+                      <span className="mt-0.5 block leading-5 text-gray-500">手动涂抹需要处理的织物区域，修复彩色杂色与局部周期波纹，并尽量保留原始亮度和针织纹理。</span>
+                    </span>
+                  </label>
+
+                  {localizedChromaMoire && (
+                    <>
+                      {preview && origDims ? (
+                        <MoireMaskEditor
+                          imageUrl={preview}
+                          imageWidth={origDims.w}
+                          imageHeight={origDims.h}
+                          maskCanvasRef={localizedMoireMaskCanvasRef}
+                          onMaskChange={handleLocalizedMoireMaskChange}
+                        />
+                      ) : (
+                        <p className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+                          上传单张照片后，可以在原图上涂抹需要修复的彩色摩尔纹区域。
+                        </p>
+                      )}
+                      {preview && !hasLocalizedMoireMask && (
+                        <p className="mt-2 text-[10px] leading-4 text-amber-700">请先在图片上涂抹至少一个处理区域，再开始放大。</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               <div className="border-t border-gray-100 pt-3">
                 <div className='text-xs font-medium text-gray-500 mb-2'>{'\u8272\u5f69/\u5bf9\u6bd4\u5ea6'}</div>
@@ -2831,7 +2854,39 @@ const zipDownloadLockRef = useRef(false)
                     </p>
                   )}
                 </div>
-            </div>
+                {contentType === 'photo' && (
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <div className="text-xs font-medium text-gray-500 mb-2">放大后修复</div>
+                    <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
+                      <input type="checkbox" checked={repairColorFringes}
+                        disabled={!aiUpscale}
+                        onChange={(e) => setRepairColorFringes(e.target.checked)}
+                        className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40" />
+                      <span><strong className="font-semibold text-gray-700">修复放大色边（测试版）</strong><span className="mt-0.5 block leading-4 text-gray-400">仅校正 AI 放大后高反差边缘的异常色块，保留亮度与纹理。</span></span>
+                    </label>
+                    {aiUpscale && repairColorFringes && (
+                      <div className="mt-2">
+                        <div className="inline-grid grid-cols-3 gap-1 rounded-lg border border-gray-200 bg-white p-1">
+                          {[
+                            ['light', '轻度'],
+                            ['standard', '标准'],
+                            ['strong', '加强'],
+                          ].map(([id, label]) => (
+                            <button key={id} type="button" onClick={() => setColorFringeStrength(id)}
+                              className={`px-3 py-1.5 rounded-md text-[11px] font-semibold ${colorFringeStrength === id ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="mt-1.5 text-[10px] leading-4 text-gray-400">只适用于 AI 放大；若边缘本身带有刻意的彩色描边，请先从轻度或标准开始。</p>
+                      </div>
+                    )}
+                    {!aiUpscale && (
+                      <p className="mt-1.5 text-[10px] leading-4 text-gray-400">开启 AI 放大后可用。它在放大完成后执行，因此不会磨平原图纹理。</p>
+                    )}
+                  </div>
+                )}
+              </div>
           </div>
           {/* 提交按钮 */}
           {!batchMode && (
@@ -2855,7 +2910,9 @@ const zipDownloadLockRef = useRef(false)
                   </div>
                 )}
 
-                <button onClick={handleProcess} disabled={!preview || processing || !!processEstimate?.blockReason}
+                <button onClick={handleProcess}
+                  disabled={!preview || processing || !!processEstimate?.blockReason ||
+                    (localizedChromaMoire && !hasLocalizedMoireMask)}
                   className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-indigo-300 text-white rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors">
                 {processing ? <><Loader2 className="w-4 h-4 animate-spin" /> {'\u5904\u7406\u4e2d...'}</> : <><ZoomIn className="w-4 h-4" /> {'\u5f00\u59cb\u653e\u5927'}</>}
               </button>
@@ -3216,17 +3273,6 @@ const zipDownloadLockRef = useRef(false)
           <div className="text-center py-2 text-white/25 text-[11px] shrink-0 bg-black/40">{'\u6eda\u52a8\u67e5\u770b\u7ec6\u8282 \u00b7 \u6ed1\u5757\u7f29\u653e \u00b7 \u8054\u52a8\u6eda\u52a8\u53ef\u5f00\u5173 \u00b7 \u70b9\u51fb\u7a7a\u767d\u5173\u95ed'}</div>
         </div>
       )}
-    </div>
-  )
-}
-
-function PageLoading({ label }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50/80 px-4">
-      <div className="rounded-xl border border-gray-200 bg-white px-6 py-5 text-center shadow-sm">
-        <Loader2 className="mx-auto h-6 w-6 animate-spin text-indigo-500" />
-        <p className="mt-3 text-sm font-semibold text-gray-700">{label}</p>
-      </div>
     </div>
   )
 }
