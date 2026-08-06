@@ -371,12 +371,12 @@ const zipDownloadLockRef = useRef(false)
   }, [])
 
   useEffect(() => {
-    trackEvent('page_view', { path: window.location.pathname })
+    trackEvent('page_view', { path: route })
     if (!sessionStorage.getItem('tuscale_session_tracked')) {
       sessionStorage.setItem('tuscale_session_tracked', '1')
-      trackEvent('session_start', { path: window.location.pathname })
+      trackEvent('session_start', { path: route })
     }
-  }, [])
+  }, [route])
 
  // --- 键盘快捷键 ---
  useEffect(() => {

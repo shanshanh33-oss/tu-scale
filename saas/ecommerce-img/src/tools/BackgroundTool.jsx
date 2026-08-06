@@ -1344,6 +1344,7 @@ export default function BackgroundTool({ navigate }) {
     if (!file || !preview) return
     setProcessing(true)
     const processingStartedAt = performance.now()
+    trackEvent('process_start', { tool: 'product_image', method, preset: preset.id })
     setCutoutError('')
     setCutoutStatus(method === 'removebg' ? '正在调用 AI 抠图...' : '正在清理纯色背景并生成白底图...')
     try {
@@ -1422,10 +1423,14 @@ export default function BackgroundTool({ navigate }) {
     batchDownloadLockRef.current = true
     setProcessing(true)
     setNormalizeError('')
+    const processingStartedAt = performance.now()
+    let generationStarted = false
+    trackEvent('batch_start', { tool: 'product_image', count: batchFiles.length, batchSize: batchFiles.length, preset: normalizePreset.id })
     try {
       if (!batchAnalysis.length) throw new Error('请先点击“筛选识别”，再确认每张图的规范设置。')
       const unconfirmed = batchAnalysis.filter(item => !cropOverrides[item.id]?.confirmed)
       if (unconfirmed.length) throw new Error(`还有 ${unconfirmed.length} 张图片未确认，请先单张确认或批量确认。`)
+      generationStarted = true
       setNormalizeStatus(`正在生成 ${batchFiles.length} 张规范图并打包...`)
       const zip = new JSZip()
       const folderName = `${normalizePreset.platform}_${normalizePreset.w}x${normalizePreset.h}_商品图`
@@ -1460,6 +1465,8 @@ export default function BackgroundTool({ navigate }) {
       if (batchExportRef.current.signature !== signature) {
         batchExportRef.current = { signature, id: createExportId() }
       }
+      trackEvent('batch_normalize', { tool: 'product_image', count: batchFiles.length, batchSize: batchFiles.length, preset: normalizePreset.id, durationMs: Math.round(performance.now() - processingStartedAt) })
+      trackEvent('batch_item_success', { tool: 'product_image', count: batchFiles.length, batchSize: batchFiles.length, preset: normalizePreset.id, durationMs: Math.round(performance.now() - processingStartedAt) })
       trackEvent('download_success', { tool: 'product_image', mode: 'batch_zip', preset: normalizePreset.id })
       trackEvent('exported_image', {
         tool: 'product_image',
@@ -1470,6 +1477,9 @@ export default function BackgroundTool({ navigate }) {
       })
     } catch (err) {
       setNormalizeError(err?.message || '批量规范失败')
+      if (generationStarted) {
+        trackEvent('batch_item_error', { tool: 'product_image', count: 1, batchSize: batchFiles.length, preset: normalizePreset.id, errorCode: 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
+      }
     } finally {
       batchDownloadLockRef.current = false
       setProcessing(false)

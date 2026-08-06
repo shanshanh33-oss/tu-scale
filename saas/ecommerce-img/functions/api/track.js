@@ -3,12 +3,14 @@ const ALLOWED_EVENTS = new Set([
   'session_start',
   'image_uploaded',
   'ai_enabled',
+  'crop_preset_selected',
   'process_start',
   'process_success',
   'process_error',
   'batch_start',
   'batch_item_success',
   'batch_item_error',
+  'batch_normalize',
   'download',
   'download_zip',
   'download_success',
@@ -18,7 +20,7 @@ const ALLOWED_EVENTS = new Set([
 
 const ID_PATTERN = /^[a-z]_[a-zA-Z0-9-]{8,80}$/
 const EVENT_LOG_TTL = 60 * 60 * 24 * 60
-const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image'])
+const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image', 'contact'])
 const IDEMPOTENT_EVENTS = new Set(['download_success', 'exported_image'])
 const MAX_BATCH_EVENTS = 5
 const SOURCE_VALUES = new Set(['direct', 'google', 'baidu', 'external'])
@@ -97,7 +99,7 @@ const normalizeEventPayload = (item) => {
       edition: EDITION_VALUES.has(data.edition) ? data.edition : 'desktop',
       scale: ['1', '2', '4', 'custom'].includes(String(data.scale || '')) ? String(data.scale) : '',
       aiMode: data.ai === true ? 'ai' : data.ai === false ? 'standard' : '',
-      aiDetailMode: ['photo', 'anime'].includes(String(data.aiDetailMode || '')) ? String(data.aiDetailMode) : '',
+      aiDetailMode: ['preserve', 'strong', 'photo', 'anime'].includes(String(data.aiDetailMode || '')) ? String(data.aiDetailMode) : '',
       inputPixels: bucketPixels(data.inputWidth, data.inputHeight),
       outputPixels: bucketPixels(data.outputWidth, data.outputHeight),
       batchSize: bucketCount(data.batchSize || data.count),

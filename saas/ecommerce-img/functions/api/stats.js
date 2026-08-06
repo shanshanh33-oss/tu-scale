@@ -5,12 +5,14 @@ const EVENTS = [
   'session_start',
   'image_uploaded',
   'ai_enabled',
+  'crop_preset_selected',
   'process_start',
   'process_success',
   'process_error',
   'batch_start',
   'batch_item_success',
   'batch_item_error',
+  'batch_normalize',
   'download',
   'download_zip',
   'download_success',
@@ -23,13 +25,14 @@ const METRICS = [
   'unique_visitor',
 ]
 
-const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
+const TOOLS = ['upscale', 'converter', 'product_image', 'contact', 'unknown']
 const STATS_START_DATE = '2026-06-28'
 
 const TOOL_LABELS = {
   upscale: '图片放大',
   converter: '图片压缩',
   product_image: '商品图规范化',
+  contact: '反馈联系',
   unknown: '未细分旧数据',
 }
 
@@ -39,12 +42,14 @@ const LABELS = {
   unique_visitor: '独立访客（6月28日起）',
   image_uploaded: '上传图片数',
   ai_enabled: '开启 AI',
+  crop_preset_selected: '选择裁切预设',
   process_start: '开始处理',
   process_success: '单图处理成功',
   process_error: '单图处理失败',
   batch_start: '批量待处理图片数',
   batch_item_success: '批量成功图片',
   batch_item_error: '批量失败图片',
+  batch_normalize: '批量规范化图片',
   download: '旧版单张下载事件',
   download_zip: '旧版 ZIP 图片累计（可能重复）',
   download_success: '成功下载操作',
@@ -239,7 +244,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
     </tr>
   `).join('')
 
-  const toolRows = ['upscale', 'converter', 'product_image'].map((tool) => {
+  const toolRows = ['upscale', 'converter', 'product_image', 'contact'].map((tool) => {
     const total = toolBreakdown?.totals?.[tool] || createEmptyMetrics()
     const todayValue = toolBreakdown?.today?.[tool] || createEmptyMetrics()
     const totalProcessed = sumEvents(total, ['process_success', 'batch_item_success'])
@@ -444,7 +449,7 @@ const renderStatsPage = ({ labels, totals, days, toolBreakdown = {}, dataSource 
     <section>
       <div class="section-head">
         <h2>功能使用情况</h2>
-        <p>按图片放大、图片压缩和商品图规范化拆分。</p>
+        <p>按图片放大、图片压缩、商品图规范化和反馈联系拆分。</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -558,7 +563,7 @@ const renderStatsShell = () => `<!doctype html>
     <header>
       <div>
         <h1>TU Scale 流量统计</h1>
-        <p>按北京时间统计。当天数据在次日结算，结算后只读取每日汇总。</p>
+        <p>按北京时间统计。当天读取实时事件，历史日期自动补算并保存每日汇总。</p>
       </div>
       <span id="status" class="status">正在读取</span>
     </header>
@@ -566,14 +571,14 @@ const renderStatsShell = () => `<!doctype html>
     <div id="metrics" class="metrics"></div>
     <section>
       <div class="section-head"><h2>访问版本</h2><p>自 2026-07-18 起按匿名事件区分电脑版与手机版。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>版本</th><th>累计事件</th><th>昨日事件</th></tr></thead><tbody id="editionRows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>版本</th><th>累计事件</th><th>今日事件</th></tr></thead><tbody id="editionRows"></tbody></table></div>
     </section>
     <section>
-      <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、图片压缩和商品图规范化拆分。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>昨日独立访客</th><th>上传 累计/昨日</th><th>成功 累计/昨日</th><th>首次导出 累计/昨日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
+      <div class="section-head"><h2>功能使用情况</h2><p>按图片放大、图片压缩、商品图规范化和反馈联系拆分。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>首次导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
     <section>
-      <div class="section-head"><h2>商业行为信号</h2><p>按已结算的匿名事件汇总，用于判断套餐与积分需求。</p></div>
+      <div class="section-head"><h2>商业行为信号</h2><p>按匿名事件汇总，用于判断套餐与积分需求。</p></div>
       <div class="table-wrap"><table><thead><tr><th>指标</th><th>分布</th></tr></thead><tbody id="businessRows"></tbody></table></div>
     </section>
     <section>
@@ -582,7 +587,7 @@ const renderStatsShell = () => `<!doctype html>
     </section>
     <section>
       <div class="section-head"><h2>事件明细</h2><p>给调试和判断功能使用情况时看。</p></div>
-      <div class="table-wrap"><table><thead><tr><th>中文名称</th><th>事件名</th><th>累计</th><th>昨日</th></tr></thead><tbody id="eventRows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>中文名称</th><th>事件名</th><th>累计</th><th>今天</th></tr></thead><tbody id="eventRows"></tbody></table></div>
     </section>
     <p id="note" class="note">正在读取每日汇总。</p>
   </main>
@@ -596,7 +601,7 @@ const renderStatsShell = () => `<!doctype html>
     const ANOMALOUS_DAYS = { '2026-07-12': '旧版 ZIP 重复触发：426 不是不同图片的成功导出数' };
     const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
-    const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
+    const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', aiDetailMode: 'AI 细节模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
     const BUSINESS_VALUE_LABELS = { edition: { desktop: '电脑版', mobile: '手机版' } };
     const BUSINESS_FIELDS = ['edition', ...Object.keys(BUSINESS_LABELS)];
     const emptyBusiness = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]));
@@ -649,19 +654,18 @@ const renderStatsShell = () => `<!doctype html>
 
     const render = (days) => {
       const today = days[0] || { ...emptyMetrics(), tools: emptyTools() };
-      const yesterday = days.find((day) => day.day === dayText(1)) || { ...emptyMetrics(), tools: emptyTools(), settlementStatus: 'pending', day: dayText(1) };
       const totals = emptyMetrics();
       const totalTools = emptyTools();
       const totalBusiness = emptyBusiness();
       days.forEach((day) => { addMetrics(totals, day); addTools(totalTools, day.tools); addBusiness(totalBusiness, day.business); });
       const processedTotal = sum(totals, ['process_success', 'batch_item_success']);
       const errors = sum(totals, ['process_error', 'batch_item_error']);
-      const exportedYesterday = yesterday.exported_image || 0;
+      const exportedToday = today.exported_image || 0;
       const exportedTotal = totals.exported_image || 0;
       document.getElementById('metrics').innerHTML = [
-        card('昨日独立访客', yesterday.unique_visitor, yesterday.settlementStatus === 'finalized' ? '访问会话 ' + fmt(yesterday.session_start) : '昨日数据正在结算'),
-        card('昨日上传', yesterday.image_uploaded, yesterday.settlementStatus === 'finalized' ? '处理成功 ' + fmt(sum(yesterday, ['process_success', 'batch_item_success'])) : '昨日数据正在结算'),
-        card('昨日首次导出图片', exportedYesterday, yesterday.settlementStatus === 'finalized' ? '成功下载操作 ' + fmt(yesterday.download_success) : '昨日数据正在结算'),
+        card('今日独立访客', today.unique_visitor, '实时汇总 · 访问会话 ' + fmt(today.session_start)),
+        card('今天上传', today.image_uploaded, '实时汇总 · 处理成功 ' + fmt(sum(today, ['process_success', 'batch_item_success']))),
+        card('今天首次导出图片', exportedToday, '实时汇总 · 成功下载操作 ' + fmt(today.download_success)),
         card('累计独立访客', totals.unique_visitor, '累计会话 ' + fmt(totals.session_start)),
         card('累计上传', totals.image_uploaded, '成功处理 ' + fmt(processedTotal)),
         card('累计首次导出图片', exportedTotal, '成功下载操作 ' + fmt(totals.download_success)),
@@ -669,17 +673,17 @@ const renderStatsShell = () => `<!doctype html>
 
       const editions = ['desktop', 'mobile'];
       const editionTotals = totalBusiness.edition || {};
-      const editionYesterday = yesterday.business?.edition || {};
-      document.getElementById('editionRows').innerHTML = editions.map((edition) => '<tr><td><b>' + (BUSINESS_VALUE_LABELS.edition[edition] || edition) + '</b></td><td>' + fmt(editionTotals[edition]) + '</td><td>' + fmt(editionYesterday[edition]) + '</td></tr>').join('');
+      const editionToday = today.business?.edition || {};
+      document.getElementById('editionRows').innerHTML = editions.map((edition) => '<tr><td><b>' + (BUSINESS_VALUE_LABELS.edition[edition] || edition) + '</b></td><td>' + fmt(editionTotals[edition]) + '</td><td>' + fmt(editionToday[edition]) + '</td></tr>').join('');
 
-      document.getElementById('toolRows').innerHTML = ['upscale', 'converter', 'product_image'].map((tool) => {
+      document.getElementById('toolRows').innerHTML = ['upscale', 'converter', 'product_image', 'contact'].map((tool) => {
         const total = totalTools[tool] || emptyMetrics();
-        const yesterdayValue = yesterday.tools?.[tool] || emptyMetrics();
-        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(yesterdayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(yesterdayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(yesterdayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(yesterdayValue.exported_image) + '</td></tr>';
+        const todayValue = today.tools?.[tool] || emptyMetrics();
+        return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(todayValue.exported_image) + '</td></tr>';
       }).join('');
       document.getElementById('businessRows').innerHTML = Object.entries(BUSINESS_LABELS).map(([field, label]) => {
         const values = Object.entries(totalBusiness[field]).sort((a, b) => b[1] - a[1]);
-        return '<tr><td><b>' + label + '</b></td><td>' + (values.length ? values.map(([key, value]) => (BUSINESS_VALUE_LABELS[field]?.[key] || key) + '：' + fmt(value)).join(' / ') : '暂无已结算数据') + '</td></tr>';
+        return '<tr><td><b>' + label + '</b></td><td>' + (values.length ? values.map(([key, value]) => (BUSINESS_VALUE_LABELS[field]?.[key] || key) + '：' + fmt(value)).join(' / ') : '暂无数据') + '</td></tr>';
       }).join('');
 
       const recent = [...days].reverse();
@@ -691,17 +695,17 @@ const renderStatsShell = () => `<!doctype html>
         const exported = day.exported_image || 0;
         const legacyExported = sum(day, ['download', 'download_zip']);
         const anomaly = ANOMALOUS_DAYS[day.day] ? '<span class="anomaly">' + ANOMALOUS_DAYS[day.day] + '</span>' : '';
-        const settlement = day.settlementStatus === 'collecting' ? '<span class="anomaly">当天数据将在次日结算</span>' : (day.settlementStatus === 'pending' ? '<span class="anomaly">等待历史汇总</span>' : '');
+        const settlement = day.settlementStatus === 'collecting' ? '<span class="anomaly">当天实时汇总</span>' : (day.settlementStatus === 'pending' ? '<span class="anomaly">等待历史汇总</span>' : '');
         return '<tr><td>' + day.day + anomaly + settlement + '</td><td><b>' + fmt(day.page_view) + '</b>' + bar(day.page_view, visitMax) + '</td><td><b>' + fmt(day.unique_visitor) + '</b></td><td><b>' + fmt(day.session_start) + '</b></td><td><b>' + fmt(day.image_uploaded) + '</b>' + bar(day.image_uploaded, uploadMax) + '</td><td><b>' + fmt(processed) + '</b></td><td><b>' + fmt(day.download_success) + '</b></td><td><b>' + fmt(exported) + '</b>' + bar(exported, exportMax) + '</td><td><b>' + fmt(legacyExported) + '</b></td></tr>';
       }).join('');
 
-      document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(yesterday[event]) + '</td></tr>').join('');
+      document.getElementById('eventRows').innerHTML = EVENTS.map((event) => '<tr><td>' + (LABELS[event] || event) + '</td><td>' + event + '</td><td><b>' + fmt(totals[event]) + '</b></td><td>' + fmt(today[event]) + '</td></tr>').join('');
       const eventLogs = days.reduce((total, day) => total + day.eventLogCount, 0);
       const legacyReads = days.reduce((total, day) => total + day.legacyReadCount, 0);
       const metadataReads = days.reduce((total, day) => total + day.metadataReadCount, 0);
       const finalizedDays = days.filter((day) => day.settlementStatus === 'finalized').length;
       const pendingDays = days.filter((day) => day.settlementStatus === 'pending').length;
-      document.getElementById('note').textContent = '口径说明：当天事件会在次日首次查看统计时结算为每日汇总，避免反复扫描原始日志。当前已结算 ' + fmt(finalizedDays) + ' 天，等待历史汇总 ' + fmt(pendingDays) + ' 天。成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已结算原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
+      document.getElementById('note').textContent = '口径说明：当天事件实时分页汇总，过往日期在首次查看时自动补算并保存每日汇总。当前已结算 ' + fmt(finalizedDays) + ' 天，等待历史汇总 ' + fmt(pendingDays) + ' 天。成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已汇总原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
     };
 
     document.getElementById('backfill').addEventListener('click', async () => {

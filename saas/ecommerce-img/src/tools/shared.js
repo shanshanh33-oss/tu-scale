@@ -84,6 +84,7 @@ const getAnalyticsIdentity = () => {
 const inferTool = () => {
   if (typeof window === 'undefined') return 'unknown'
   if (window.location.pathname === '/product-image') return 'product_image'
+  if (window.location.pathname === '/contact') return 'contact'
   return window.location.pathname === '/format-converter' ? 'converter' : 'upscale'
 }
 

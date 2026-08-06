@@ -5,12 +5,14 @@ const EVENTS = [
   'session_start',
   'image_uploaded',
   'ai_enabled',
+  'crop_preset_selected',
   'process_start',
   'process_success',
   'process_error',
   'batch_start',
   'batch_item_success',
   'batch_item_error',
+  'batch_normalize',
   'download',
   'download_zip',
   'download_success',
@@ -19,7 +21,7 @@ const EVENTS = [
 ]
 
 const METRICS = [...EVENTS, 'unique_visitor']
-const TOOLS = ['upscale', 'converter', 'product_image', 'unknown']
+const TOOLS = ['upscale', 'converter', 'product_image', 'contact', 'unknown']
 const PAGE_SIZE = 1000
 const MAX_SETTLEMENT_PAGES = 20
 const MAX_BACKFILL_DAYS = 1
@@ -121,6 +123,27 @@ const createSummary = () => ({
   business: createBusinessSummary(),
 })
 
+const mergeSummary = (target, source) => {
+  METRICS.forEach((metric) => {
+    target.totals[metric] += source.totals?.[metric] || 0
+  })
+  TOOLS.forEach((tool) => {
+    METRICS.forEach((metric) => {
+      target.tools[tool][metric] += source.tools?.[tool]?.[metric] || 0
+    })
+    target.toolVisitors[tool].push(...(source.toolVisitors?.[tool] || []))
+  })
+  target.visitors.push(...(source.visitors || []))
+  target.eventLogCount += source.eventLogCount || 0
+  target.legacyReadCount += source.legacyReadCount || 0
+  target.metadataReadCount += source.metadataReadCount || 0
+  BUSINESS_FIELDS.forEach((field) => {
+    Object.entries(source.business?.[field] || {}).forEach(([value, count]) => {
+      target.business[field][value] = (target.business[field][value] || 0) + count
+    })
+  })
+}
+
 const toPublicSummary = async (day, summary) => {
   const visitorKeys = await hashVisitorIds(day, summary.visitors)
   const toolVisitorKeys = Object.fromEntries(await Promise.all(TOOLS.map(async (tool) => [
@@ -155,43 +178,55 @@ const readDailySummary = async (kv, day) => {
   }
 }
 
+const readEventPage = async (kv, day, cursor = '') => {
+  const listOptions = { prefix: `event:${day}:`, limit: PAGE_SIZE }
+  if (cursor) listOptions.cursor = cursor
+  const listed = await kv.list(listOptions)
+  const summary = createSummary()
+  const legacyKeys = []
+
+  for (const key of listed.keys || []) {
+    summary.eventLogCount += 1
+    const metadataEvents = getMetadataEvents(key.metadata)
+    if (metadataEvents.length) {
+      metadataEvents.forEach((item) => addEvent(summary, item))
+      summary.metadataReadCount += 1
+      continue
+    }
+    legacyKeys.push(key.name)
+  }
+
+  for (let offset = 0; offset < legacyKeys.length; offset += LEGACY_READ_CONCURRENCY) {
+    const names = legacyKeys.slice(offset, offset + LEGACY_READ_CONCURRENCY)
+    const values = await Promise.all(names.map((name) => kv.get(name)))
+    summary.legacyReadCount += values.length
+    values.forEach((value) => {
+      try {
+        getRecordEvents(JSON.parse(value || '{}')).forEach((item) => addEvent(summary, item))
+      } catch {
+        // Broken analytics records are ignored so one bad row cannot break settlement.
+      }
+    })
+  }
+
+  return {
+    summary,
+    cursor: listed.list_complete ? '' : listed.cursor,
+    complete: Boolean(listed.list_complete),
+  }
+}
+
 const settleDay = async (kv, day) => {
   const summary = createSummary()
   let cursor = ''
   let pageCount = 0
 
   do {
-    const listOptions = { prefix: `event:${day}:`, limit: PAGE_SIZE }
-    if (cursor) listOptions.cursor = cursor
-    const listed = await kv.list(listOptions)
     pageCount += 1
     if (pageCount > MAX_SETTLEMENT_PAGES) throw new Error('Daily settlement is too large')
-
-    const legacyKeys = []
-    for (const key of listed.keys || []) {
-      summary.eventLogCount += 1
-      const metadataEvents = getMetadataEvents(key.metadata)
-      if (metadataEvents.length) {
-        metadataEvents.forEach((item) => addEvent(summary, item))
-        summary.metadataReadCount += 1
-        continue
-      }
-      legacyKeys.push(key.name)
-    }
-
-    for (let offset = 0; offset < legacyKeys.length; offset += LEGACY_READ_CONCURRENCY) {
-      const names = legacyKeys.slice(offset, offset + LEGACY_READ_CONCURRENCY)
-      const values = await Promise.all(names.map((name) => kv.get(name)))
-      summary.legacyReadCount += values.length
-      values.forEach((value) => {
-        try {
-          getRecordEvents(JSON.parse(value || '{}')).forEach((item) => addEvent(summary, item))
-        } catch {
-          // Broken analytics records are ignored so one bad row cannot break settlement.
-        }
-      })
-    }
-    cursor = listed.list_complete ? '' : listed.cursor
+    const page = await readEventPage(kv, day, cursor)
+    mergeSummary(summary, page.summary)
+    cursor = page.cursor
   } while (cursor)
 
   const publicSummary = await toPublicSummary(day, summary)
@@ -214,6 +249,7 @@ export async function onRequestGet(context) {
 
   const url = new URL(context.request.url)
   const day = url.searchParams.get('day') || getChinaDate()
+  const cursor = url.searchParams.get('cursor') || ''
 
   if (!isValidDay(day)) return json({ ok: false, error: 'INVALID_DAY' }, 400)
   if (day < STATS_START_DATE) return json({ ok: false, error: 'ARCHIVED_DAY' }, 410)
@@ -242,7 +278,25 @@ export async function onRequestGet(context) {
     })
   }
 
-  if (day === getChinaDate(1)) {
+  if (day === getChinaDate()) {
+    try {
+      const page = await readEventPage(kv, day, cursor)
+      return json({
+        ok: true,
+        configured: true,
+        day,
+        status: 'collecting',
+        complete: page.complete,
+        cursor: page.cursor,
+        summary: await toPublicSummary(day, page.summary),
+      })
+    } catch (error) {
+      console.error('Stats live event read failed', error)
+      return json({ ok: false, error: 'KV_EVENT_READ_FAILED' }, 503)
+    }
+  }
+
+  if (day < getChinaDate()) {
     try {
       storedSummary = await settleDay(kv, day)
     } catch (error) {
@@ -263,7 +317,7 @@ export async function onRequestGet(context) {
     ok: true,
     configured: true,
     day,
-    status: day === getChinaDate() ? 'collecting' : 'pending',
+    status: 'pending',
     complete: true,
     summary: await toPublicSummary(day, createSummary()),
   })
