@@ -1,18 +1,94 @@
 // waifu2x AI 放大模块
+import wasmRuntimeUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
+import { canUseDesktopAiService } from './runtimePolicy';
+
 const MODEL_PATH = '/models/waifu2x.onnx';
+const ENHANCE_MODEL_PATH = '/models/waifu2x-enhance.onnx';
 const SERVER_URL = 'http://localhost:5179';
-const WASM_PATH = '/assets/ort-wasm-simd-threaded-Cpm-ox6i.wasm';
+const MODEL_PADDING = 7;
+const LOW_MEMORY_TILE_SIZE = 160;
+const MOBILE_TILE_SIZE = 192;
+const DESKTOP_TILE_SIZE = 384;
 let session = null;
+let runtime = null;
 let useLocalModel = null;
 let loadingPromise = null;
 let modelStatus = 'unloaded';
+let enhanceSession = null;
+let enhanceRuntime = null;
+let enhanceLoadingPromise = null;
+let enhanceModelStatus = 'unloaded';
 
-async function loadOrt() {
-  var ort = await import('onnxruntime-web/wasm');
-  ort.env.wasm.numThreads = 1;
+function isMobileDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+}
+
+function isAppleMobileDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+}
+
+function configureWasm(ort) {
+  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
+  var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
+  var canUseThreads = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+  var mobileDevice = isMobileDevice();
+  var appleMobile = isAppleMobileDevice();
+  var threadLimit = appleMobile
+    ? 1
+    : !mobileDevice && deviceMemory >= 8 && hardwareThreads >= 8
+      ? 4
+      : 2;
+  ort.env.wasm.numThreads = canUseThreads && !(deviceMemory > 0 && deviceMemory <= 4)
+    ? Math.max(1, Math.min(threadLimit, hardwareThreads || 1))
+    : 1;
+  // The packaged ORT proxy worker fails to initialize on some mobile Safari
+  // and Android WebView versions. Small tiles plus frequent browser yields are
+  // more compatible while keeping the exact same model math.
   ort.env.wasm.proxy = false;
-  ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': WASM_PATH };
+  // Let Vite provide the actual fingerprinted asset URL instead of relying on
+  // a build-specific filename that can change after dependency updates.
+  ort.env.wasm.wasmPaths = { 'ort-wasm-simd-threaded.wasm': wasmRuntimeUrl };
+}
+
+async function loadWasmOrt() {
+  var ort = await import('onnxruntime-web/wasm');
+  configureWasm(ort);
   return ort;
+}
+
+async function createBrowserSession(buffer) {
+  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
+  var lowMemoryDevice = deviceMemory > 0 && deviceMemory <= 4;
+  var mobileDevice = isMobileDevice();
+  var androidChrome = typeof navigator !== 'undefined'
+    && /Android/i.test(navigator.userAgent)
+    && /Chrome/i.test(navigator.userAgent)
+    && !/EdgA|OPR/i.test(navigator.userAgent);
+  var allowWebGpu = !mobileDevice || (androidChrome && deviceMemory >= 8);
+  if (typeof navigator !== 'undefined' && navigator.gpu && !lowMemoryDevice && allowWebGpu) {
+    try {
+      var webgpuOrt = await import('onnxruntime-web/webgpu');
+      webgpuOrt.env.webgpu.powerPreference = 'high-performance';
+      var webgpuSession = await webgpuOrt.InferenceSession.create(buffer, {
+        executionProviders: [{ name: 'webgpu', preferredLayout: 'NHWC' }],
+        graphOptimizationLevel: 'all',
+      });
+      return { ort: webgpuOrt, session: webgpuSession, backend: 'webgpu' };
+    } catch (webgpuError) {
+      console.warn('WebGPU unavailable for waifu2x, falling back to WASM.', webgpuError);
+    }
+  }
+
+  var wasmOrt = await loadWasmOrt();
+  var wasmSession = await wasmOrt.InferenceSession.create(buffer, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all',
+  });
+  return { ort: wasmOrt, session: wasmSession, backend: 'wasm' };
 }
 
 export async function loadModel() {
@@ -22,8 +98,10 @@ export async function loadModel() {
   loadingPromise = (async function() {
     modelStatus = 'loading';
 
-    // 先试本地服务（开发环境效果最好）
+    // 只有桌面版 localhost 页面可以连接本机服务；公开网站不得探测用户端口。
+    var mobileLayout = isMobileDevice();
     try {
+      if (mobileLayout || !canUseDesktopAiService()) throw new Error('Skip desktop localhost probe');
       var r = await fetch(SERVER_URL + '/process', { method: 'OPTIONS', signal: AbortSignal.timeout(1500) });
       if (r.ok) {
         useLocalModel = false;
@@ -38,11 +116,12 @@ export async function loadModel() {
     try {
       var res = await fetch(MODEL_PATH);
       if (res.ok) {
-        var ort = await loadOrt();
         var buf = await res.arrayBuffer();
-        session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
+        var browser = await createBrowserSession(buf);
+        runtime = browser.ort;
+        session = browser.session;
         useLocalModel = true;
-        modelStatus = 'loaded';
+        modelStatus = browser.backend;
         return true;
       }
     } catch {
@@ -61,114 +140,284 @@ export async function loadModel() {
 export function isModelLoaded() { return !!session || modelStatus === 'server'; }
 export function getModelStatus() { return modelStatus; }
 
+export async function loadEnhanceModel() {
+  if (enhanceSession) return true;
+  if (enhanceLoadingPromise) return enhanceLoadingPromise;
+
+  enhanceLoadingPromise = (async function() {
+    enhanceModelStatus = 'loading';
+    try {
+      var response = await fetch(ENHANCE_MODEL_PATH);
+      if (!response.ok) throw new Error('Enhance model download failed');
+      var buffer = await response.arrayBuffer();
+      var browser = await createBrowserSession(buffer);
+      enhanceRuntime = browser.ort;
+      enhanceSession = browser.session;
+      enhanceModelStatus = browser.backend;
+      return true;
+    } catch {
+      enhanceSession = null;
+      enhanceRuntime = null;
+      enhanceModelStatus = 'failed';
+      return false;
+    }
+  })().finally(function() {
+    enhanceLoadingPromise = null;
+  });
+
+  return enhanceLoadingPromise;
+}
+
+export function isEnhanceModelLoaded() { return !!enhanceSession; }
+export function getEnhanceModelStatus() { return enhanceModelStatus; }
+
 export async function upscaleWithAI(imageData, scale = 2, options = {}) {
   if (typeof scale === 'object' && scale !== null) {
     options = scale;
     scale = 2;
   }
   if (useLocalModel === null && !session) await loadModel();
-  if (useLocalModel === false) return runServer(imageData, scale);
-  if (session) return runLocal(imageData, options);
+  if (useLocalModel === false) {
+    try {
+      return await runServer(imageData, scale);
+    } catch (error) {
+      console.warn('Desktop AI service failed during processing.', error);
+      throw new Error('AI_LOCAL_SERVICE_FAILED', { cause: error });
+    }
+  }
+  if (session) {
+    try {
+      return await runLocal(imageData, options);
+    } catch (error) {
+      console.warn('Browser AI inference failed.', error);
+      var message = String(error?.message || error || '');
+      if (error instanceof RangeError || /memory|allocation|out of bounds|detached|device lost/i.test(message)) {
+        throw new Error('AI_MEMORY_FAILED', { cause: error });
+      }
+      throw new Error('AI_INFERENCE_FAILED', { cause: error });
+    }
+  }
   throw new Error('AI model not available');
 }
 
+// The dedicated VGG7 photo model repairs every tile directly at 1x. Unlike the
+// old 2x-then-reduce path, generated detail is never discarded by downscaling.
+export async function enhanceCanvasWithAI(sourceCanvas, options = {}) {
+  if (!enhanceSession) await loadEnhanceModel();
+  if (!enhanceSession) throw new Error('AI enhance model not available');
+  return runLocalEnhanceCanvas(sourceCanvas, options);
+}
+
+function getTileSize(options = {}) {
+  if (Number.isFinite(options.tileSize)) {
+    return Math.max(64, Math.min(512, Math.round(options.tileSize)));
+  }
+  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
+  var mobileLayout = isMobileDevice();
+  if (deviceMemory > 0 && deviceMemory <= 4) return LOW_MEMORY_TILE_SIZE;
+  if (mobileLayout && modelStatus === 'webgpu') return 256;
+  return mobileLayout ? MOBILE_TILE_SIZE : DESKTOP_TILE_SIZE;
+}
+
+export function createTilePlan(width, height, tileSize, padding = MODEL_PADDING) {
+  var tiles = [];
+  for (let coreY = 0; coreY < height; coreY += tileSize) {
+    for (let coreX = 0; coreX < width; coreX += tileSize) {
+      var coreWidth = Math.min(tileSize, width - coreX);
+      var coreHeight = Math.min(tileSize, height - coreY);
+      tiles.push({
+        coreX,
+        coreY,
+        coreWidth,
+        coreHeight,
+        padding,
+        inputWidth: coreWidth + padding * 2 + (coreWidth % 2),
+        inputHeight: coreHeight + padding * 2 + (coreHeight % 2),
+      });
+    }
+  }
+  return tiles;
+}
+
+function yieldToBrowser() {
+  return new Promise(function(resolve) {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() { resolve(); });
+    else setTimeout(resolve, 0);
+  });
+}
+
 async function runLocal(imageData, options = {}) {
-  var { data, width, height } = imageData;
-  var inLen = 3 * height * width;
-  var inputData = new Float32Array(inLen);
-  for (let y = 0; y < height; y++)
-    for (let x = 0; x < width; x++) {
-      var si = (y * width + x) * 4;
-      var yv = (0.299 * data[si] + 0.587 * data[si + 1] + 0.114 * data[si + 2]) / 255;
-      for (let c = 0; c < 3; c++)
-        inputData[c * height * width + y * width + x] = yv;
+  var tileSize = getTileSize(options);
+  var tiles = createTilePlan(imageData.width, imageData.height, tileSize);
+  var ort = runtime || await loadWasmOrt();
+  var outputWidth = imageData.width * 2;
+  var outputHeight = imageData.height * 2;
+  var outputData = new Uint8ClampedArray(outputWidth * outputHeight * 4);
+  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
+  var mobileDevice = isMobileDevice();
+  var inputBuffers = new Map();
+  var yieldEvery = deviceMemory > 0 && deviceMemory <= 4
+    ? 1
+    : mobileDevice
+      ? modelStatus === 'webgpu' ? 4 : 1
+      : 4;
+  var opaque = true;
+  for (let alphaIndex = 3; alphaIndex < imageData.data.length; alphaIndex += 4) {
+    if (imageData.data[alphaIndex] !== 255) {
+      opaque = false;
+      break;
     }
-  var ort = await loadOrt();
-  var t = new ort.Tensor('float32', inputData, [1, 3, height, width]);
-  var inputName = session.inputNames?.[0] || 'Input1';
-  var outputName = session.outputNames?.[0] || 'output';
-  var r = await session.run({ [inputName]: t });
-  var o = r[outputName] || Object.values(r)[0]; var oh = o.dims[2], ow = o.dims[3];
-  var base = upscaleImageData(imageData, ow, oh);
-  var detail = getAiDetailMap(o, ow, oh);
-  var strongDetail = options.detailMode === 'strong';
-  var detailAmount = strongDetail ? 0.9 : 0.45;
-  var detailLimit = strongDetail ? 34 : 18;
-  var ratioMin = strongDetail ? 0.78 : 0.88;
-  var ratioMax = strongDetail ? 1.28 : 1.14;
-  var out = new Uint8ClampedArray(oh * ow * 4);
-  for (let y = 0; y < oh; y++)
-    for (let x = 0; x < ow; x++) {
-      var di = (y * ow + x) * 4;
-      var pixel = y * ow + x;
-      var baseR = base.data[di], baseG = base.data[di + 1], baseB = base.data[di + 2];
-      var baseY = Math.max(1, 0.299 * baseR + 0.587 * baseG + 0.114 * baseB);
-      var targetY = baseY + Math.max(-detailLimit, Math.min(detailLimit, detail[pixel] * detailAmount));
-      var ratio = Math.max(ratioMin, Math.min(ratioMax, targetY / baseY));
-      out[di] = clampByte(baseR * ratio);
-      out[di + 1] = clampByte(baseG * ratio);
-      out[di + 2] = clampByte(baseB * ratio);
-      out[di + 3] = base.data[di + 3];
-    }
-  return new ImageData(out, ow, oh);
-}
-
-function tensorByte(value) {
-  return clampByte(value * 255);
-}
-
-function clampByte(value) {
-  return Math.max(0, Math.min(255, Math.round(value)));
-}
-
-function getAiDetailMap(output, width, height) {
-  var count = width * height;
-  var luma = new Float32Array(count);
-  var blur = new Float32Array(count);
-  var detail = new Float32Array(count);
-
-  for (let i = 0; i < count; i++) {
-    var aiR = tensorByte(output.data[i]);
-    var aiG = tensorByte(output.data[count + i]);
-    var aiB = tensorByte(output.data[count * 2 + i]);
-    luma[i] = 0.299 * aiR + 0.587 * aiG + 0.114 * aiB;
   }
 
-  for (let y = 0; y < height; y++)
-    for (let x = 0; x < width; x++) {
-      var sum = 0;
-      var weight = 0;
-      for (let dy = -1; dy <= 1; dy++)
-        for (let dx = -1; dx <= 1; dx++) {
-          var sx = Math.max(0, Math.min(width - 1, x + dx));
-          var sy = Math.max(0, Math.min(height - 1, y + dy));
-          var w = dx === 0 && dy === 0 ? 4 : 1;
-          sum += luma[sy * width + sx] * w;
-          weight += w;
-        }
-      blur[y * width + x] = sum / weight;
-    }
+  for (let index = 0; index < tiles.length; index++) {
+    var tile = tiles[index];
+    var tileResult = await runLocalTile(imageData, tile, ort, inputBuffers);
+    copyModelTile(tileResult, imageData, outputData, outputWidth, tile, opaque);
+    tileResult.dispose?.();
+    options.onProgress?.({ completed: index + 1, total: tiles.length });
+    if ((index + 1) % yieldEvery === 0 || index === tiles.length - 1) await yieldToBrowser();
+  }
 
-  for (let i = 0; i < count; i++) detail[i] = luma[i] - blur[i];
-
-  return detail;
+  return new ImageData(outputData, outputWidth, outputHeight);
 }
 
-function upscaleImageData(imageData, width, height) {
-  var src = document.createElement('canvas');
-  src.width = imageData.width;
-  src.height = imageData.height;
-  src.getContext('2d').putImageData(imageData, 0, 0);
-  var dst = document.createElement('canvas');
-  dst.width = width;
-  dst.height = height;
-  var ctx = dst.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(src, 0, 0, width, height);
-  return ctx.getImageData(0, 0, width, height);
+async function runLocalEnhanceCanvas(sourceCanvas, options = {}) {
+  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
+  var tileSize = Number.isFinite(options.tileSize)
+    ? Math.max(64, Math.min(512, Math.round(options.tileSize)))
+    : deviceMemory > 0 && deviceMemory <= 4 ? 192 : isMobileDevice() ? 224 : 384;
+  var tiles = createTilePlan(sourceCanvas.width, sourceCanvas.height, tileSize);
+  var ort = enhanceRuntime || await loadWasmOrt();
+  var sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  var outputCanvas = document.createElement('canvas');
+  outputCanvas.width = sourceCanvas.width;
+  outputCanvas.height = sourceCanvas.height;
+  var outputContext = outputCanvas.getContext('2d');
+  var inputBuffers = new Map();
+
+  for (let index = 0; index < tiles.length; index++) {
+    var tile = tiles[index];
+    tile.inputWidth = tile.coreWidth + tile.padding * 2;
+    tile.inputHeight = tile.coreHeight + tile.padding * 2;
+    var inputX = Math.max(0, tile.coreX - tile.padding);
+    var inputY = Math.max(0, tile.coreY - tile.padding);
+    var inputRight = Math.min(
+      sourceCanvas.width,
+      tile.coreX + tile.coreWidth + tile.padding,
+    );
+    var inputBottom = Math.min(
+      sourceCanvas.height,
+      tile.coreY + tile.coreHeight + tile.padding,
+    );
+    var localImage = sourceContext.getImageData(
+      inputX,
+      inputY,
+      inputRight - inputX,
+      inputBottom - inputY,
+    );
+    var localTile = {
+      ...tile,
+      coreX: tile.coreX - inputX,
+      coreY: tile.coreY - inputY,
+    };
+    var tileResult = await runLocalTile(localImage, localTile, ort, inputBuffers, enhanceSession);
+    var enhancedTile = createEnhanceTile(tileResult, localImage, localTile);
+    outputContext.putImageData(enhancedTile, tile.coreX, tile.coreY);
+    tileResult.dispose?.();
+    options.onProgress?.({ completed: index + 1, total: tiles.length });
+    await yieldToBrowser();
+  }
+
+  return outputCanvas;
+}
+
+async function runLocalTile(imageData, tile, ort, inputBuffers, activeSession = session) {
+  var { data } = imageData;
+  var width = tile.inputWidth;
+  var height = tile.inputHeight;
+  var planeSize = height * width;
+  var inLen = 3 * planeSize;
+  var bufferKey = width + 'x' + height;
+  var inputData = inputBuffers?.get(bufferKey);
+  if (!inputData) {
+    inputData = new Float32Array(inLen);
+    inputBuffers?.set(bufferKey, inputData);
+  }
+  var inverse255 = 1 / 255;
+  for (let y = 0; y < height; y++) {
+    var sourceY = tile.coreY - tile.padding + y;
+    if (sourceY < 0) sourceY = 0;
+    else if (sourceY >= imageData.height) sourceY = imageData.height - 1;
+    for (let x = 0; x < width; x++) {
+      var sourceX = tile.coreX - tile.padding + x;
+      if (sourceX < 0) sourceX = 0;
+      else if (sourceX >= imageData.width) sourceX = imageData.width - 1;
+      var si = (sourceY * imageData.width + sourceX) * 4;
+      var pixel = y * width + x;
+      inputData[pixel] = data[si] * inverse255;
+      inputData[planeSize + pixel] = data[si + 1] * inverse255;
+      inputData[planeSize * 2 + pixel] = data[si + 2] * inverse255;
+    }
+  }
+  var t = new ort.Tensor('float32', inputData, [1, 3, height, width]);
+  var inputName = activeSession.inputNames?.[0] || 'Input1';
+  var outputName = activeSession.outputNames?.[0] || 'output';
+  var r = await activeSession.run({ [inputName]: t });
+  return r[outputName] || Object.values(r)[0];
+}
+
+function modelByte(value) {
+  var scaled = value * 255;
+  return scaled <= 0 ? 0 : scaled >= 255 ? 255 : Math.round(scaled);
+}
+
+function copyModelTile(modelOutput, imageData, outputData, outputWidth, tile, opaque) {
+  var modelWidth = modelOutput.dims[3];
+  var modelPixels = modelOutput.dims[2] * modelWidth;
+  var copyWidth = tile.coreWidth * 2;
+  var copyHeight = tile.coreHeight * 2;
+  for (let y = 0; y < copyHeight; y++) {
+    var modelRow = y * modelWidth;
+    var destination = ((tile.coreY * 2 + y) * outputWidth + tile.coreX * 2) * 4;
+    var sourceY = tile.coreY + (y >> 1);
+    for (let x = 0; x < copyWidth; x++) {
+      var modelPixel = modelRow + x;
+      outputData[destination] = modelByte(modelOutput.data[modelPixel]);
+      outputData[destination + 1] = modelByte(modelOutput.data[modelPixels + modelPixel]);
+      outputData[destination + 2] = modelByte(modelOutput.data[modelPixels * 2 + modelPixel]);
+      outputData[destination + 3] = opaque
+        ? 255
+        : imageData.data[(sourceY * imageData.width + tile.coreX + (x >> 1)) * 4 + 3];
+      destination += 4;
+    }
+  }
+}
+
+function createEnhanceTile(modelOutput, sourceImage, tile) {
+  var modelWidth = modelOutput.dims[3];
+  var modelPixels = modelOutput.dims[2] * modelWidth;
+  var output = new Uint8ClampedArray(tile.coreWidth * tile.coreHeight * 4);
+  for (let y = 0; y < tile.coreHeight; y++) {
+    var modelRow = y * modelWidth;
+    for (let x = 0; x < tile.coreWidth; x++) {
+      var modelPixel = modelRow + x;
+      var destination = (y * tile.coreWidth + x) * 4;
+      for (let channel = 0; channel < 3; channel++) {
+        var plane = channel * modelPixels;
+        output[destination + channel] = modelByte(modelOutput.data[plane + modelPixel]);
+      }
+      var sourcePixel = (
+        (tile.coreY + y) * sourceImage.width
+        + tile.coreX
+        + x
+      ) * 4;
+      output[destination + 3] = sourceImage.data[sourcePixel + 3];
+    }
+  }
+  return new ImageData(output, tile.coreWidth, tile.coreHeight);
 }
 async function runServer(imageData, scale) {
+  if (!canUseDesktopAiService()) throw new Error('AI_LOCAL_SERVICE_DISABLED');
   var c = document.createElement('canvas');
   c.width = imageData.width; c.height = imageData.height;
   c.getContext('2d').putImageData(imageData, 0, 0);
@@ -177,7 +426,10 @@ async function runServer(imageData, scale) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ image: b64, scale })
   });
-  if (!res.ok) throw new Error('Server error');
+  if (!res.ok) {
+    var failure = await res.json().catch(function() { return {}; });
+    throw new Error(failure.error || 'Desktop AI service error');
+  }
   var d = await res.json();
   var img = new Image();
   await new Promise(function(rs, rj) { img.onload = rs; img.onerror = rj; img.src = 'data:image/png;base64,' + d.image; });
