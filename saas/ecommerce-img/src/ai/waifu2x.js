@@ -1,6 +1,8 @@
 // waifu2x AI 放大模块
 import wasmRuntimeUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 import { canUseDesktopAiService } from './runtimePolicy';
+import { StreamingPngEncoder, supportsStreamingPng } from './streamingPng';
+import { createStreamingRowResampler } from './streamingResize';
 
 const MODEL_PATH = '/models/waifu2x.onnx';
 const ENHANCE_MODEL_PATH = '/models/waifu2x-enhance.onnx';
@@ -91,6 +93,18 @@ async function createBrowserSession(buffer) {
   return { ort: wasmOrt, session: wasmSession, backend: 'wasm' };
 }
 
+async function loadBrowserModelSession() {
+  if (session) return true
+  var res = await fetch(MODEL_PATH)
+  if (!res.ok) return false
+  var buf = await res.arrayBuffer()
+  var browser = await createBrowserSession(buf)
+  runtime = browser.ort
+  session = browser.session
+  if (modelStatus !== 'server') modelStatus = browser.backend
+  return true
+}
+
 export async function loadModel() {
   if (session || modelStatus === 'server') return true;
   if (loadingPromise) return loadingPromise;
@@ -114,14 +128,8 @@ export async function loadModel() {
 
     // 再试浏览器 ONNX 模型
     try {
-      var res = await fetch(MODEL_PATH);
-      if (res.ok) {
-        var buf = await res.arrayBuffer();
-        var browser = await createBrowserSession(buf);
-        runtime = browser.ort;
-        session = browser.session;
+      if (await loadBrowserModelSession()) {
         useLocalModel = true;
-        modelStatus = browser.backend;
         return true;
       }
     } catch {
@@ -198,6 +206,28 @@ export async function upscaleWithAI(imageData, scale = 2, options = {}) {
     }
   }
   throw new Error('AI model not available');
+}
+
+export function canStreamAiPngExport() {
+  return supportsStreamingPng() && useLocalModel !== false
+}
+
+export async function upscaleWithAIToPng(imageData, targetWidth, targetHeight, options = {}) {
+  if (!supportsStreamingPng()) {
+    throw new Error('STREAMING_PNG_UNSUPPORTED')
+  }
+  if (!session && useLocalModel === null) await loadModel()
+  if (!session || useLocalModel === false) throw new Error('STREAMING_PNG_UNSUPPORTED')
+  try {
+    return await runLocalToPng(imageData, targetWidth, targetHeight, options)
+  } catch (error) {
+    console.warn('Browser AI tiled PNG export failed.', error)
+    const message = String(error?.message || error || '')
+    if (error instanceof RangeError || /memory|allocation|out of bounds|detached|device lost/i.test(message)) {
+      throw new Error('AI_TILED_MEMORY_FAILED', { cause: error })
+    }
+    throw error
+  }
 }
 
 // The dedicated VGG7 photo model repairs every tile directly at 1x. Unlike the
@@ -279,6 +309,131 @@ async function runLocal(imageData, options = {}) {
   }
 
   return new ImageData(outputData, outputWidth, outputHeight);
+}
+
+function createPreviewWriter(width, height, maxEdge = 1600) {
+  if (typeof document === 'undefined' || typeof ImageData === 'undefined') return null
+  const scale = Math.min(1, maxEdge / Math.max(width, height))
+  const preview = document.createElement('canvas')
+  preview.width = Math.max(1, Math.round(width * scale))
+  preview.height = Math.max(1, Math.round(height * scale))
+  const previewContext = preview.getContext('2d')
+  previewContext.imageSmoothingEnabled = true
+  previewContext.imageSmoothingQuality = 'high'
+  const strip = document.createElement('canvas')
+
+  return {
+    writeRows(rgba, rowCount, startY) {
+      strip.width = width
+      strip.height = rowCount
+      const stripContext = strip.getContext('2d')
+      const clamped = new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rowCount * width * 4)
+      stripContext.putImageData(new ImageData(clamped, width, rowCount), 0, 0)
+      const previewTop = Math.round(startY * preview.height / height)
+      const previewBottom = Math.round((startY + rowCount) * preview.height / height)
+      if (previewBottom > previewTop) {
+        previewContext.drawImage(
+          strip,
+          0,
+          0,
+          width,
+          rowCount,
+          0,
+          previewTop,
+          preview.width,
+          previewBottom - previewTop,
+        )
+      }
+    },
+    async finish() {
+      const blob = await new Promise(resolve => preview.toBlob(resolve, 'image/png'))
+      strip.width = 0
+      strip.height = 0
+      preview.width = 0
+      preview.height = 0
+      if (!blob) throw new Error('EXPORT_FAILED')
+      return blob
+    },
+  }
+}
+
+function copyModelTileToStrip(modelOutput, imageData, stripData, stripWidth, tile, opaque) {
+  const modelWidth = modelOutput.dims[3]
+  const modelPixels = modelOutput.dims[2] * modelWidth
+  const copyWidth = tile.coreWidth * 2
+  const copyHeight = tile.coreHeight * 2
+  for (let y = 0; y < copyHeight; y++) {
+    const modelRow = y * modelWidth
+    let destination = (y * stripWidth + tile.coreX * 2) * 4
+    const sourceY = tile.coreY + (y >> 1)
+    for (let x = 0; x < copyWidth; x++) {
+      const modelPixel = modelRow + x
+      stripData[destination] = modelByte(modelOutput.data[modelPixel])
+      stripData[destination + 1] = modelByte(modelOutput.data[modelPixels + modelPixel])
+      stripData[destination + 2] = modelByte(modelOutput.data[modelPixels * 2 + modelPixel])
+      stripData[destination + 3] = opaque
+        ? 255
+        : imageData.data[(sourceY * imageData.width + tile.coreX + (x >> 1)) * 4 + 3]
+      destination += 4
+    }
+  }
+}
+
+async function runLocalToPng(imageData, targetWidth, targetHeight, options = {}) {
+  const tileSize = Math.min(getTileSize(options), 192)
+  const tiles = createTilePlan(imageData.width, imageData.height, tileSize)
+  const ort = runtime || await loadWasmOrt()
+  const modelWidth = imageData.width * 2
+  const modelHeight = imageData.height * 2
+  const encoder = new StreamingPngEncoder(targetWidth, targetHeight)
+  const preview = createPreviewWriter(targetWidth, targetHeight, options.previewMaxEdge)
+  const inputBuffers = new Map()
+  let completed = 0
+  let writtenRows = 0
+  let opaque = true
+  for (let alphaIndex = 3; alphaIndex < imageData.data.length; alphaIndex += 4) {
+    if (imageData.data[alphaIndex] !== 255) {
+      opaque = false
+      break
+    }
+  }
+
+  const writeOutputRows = async (rgba, rowCount, startY) => {
+    await encoder.writeRows(rgba, rowCount)
+    preview?.writeRows(rgba, rowCount, startY)
+    writtenRows += rowCount
+  }
+  const needsResize = modelWidth !== targetWidth || modelHeight !== targetHeight
+  const resampler = needsResize
+    ? createStreamingRowResampler(modelWidth, modelHeight, targetWidth, targetHeight, opaque, writeOutputRows)
+    : null
+
+  for (let coreY = 0; coreY < imageData.height; coreY += tileSize) {
+    const coreHeight = Math.min(tileSize, imageData.height - coreY)
+    const strip = new Uint8Array(modelWidth * coreHeight * 2 * 4)
+    const rowTiles = tiles.filter(tile => tile.coreY === coreY)
+    for (const tile of rowTiles) {
+      const tileResult = await runLocalTile(imageData, tile, ort, inputBuffers)
+      copyModelTileToStrip(tileResult, imageData, strip, modelWidth, tile, opaque)
+      tileResult.dispose?.()
+      completed++
+      options.onProgress?.({ completed, total: tiles.length })
+      await yieldToBrowser()
+    }
+    if (resampler) await resampler.pushRows(strip, coreHeight * 2)
+    else await writeOutputRows(strip, coreHeight * 2, writtenRows)
+  }
+
+  await resampler?.finish()
+  const blob = await encoder.finish()
+  const previewBlob = preview ? await preview.finish() : blob
+  return {
+    blob,
+    previewBlob,
+    width: targetWidth,
+    height: targetHeight,
+    size: blob.size,
+  }
 }
 
 async function runLocalEnhanceCanvas(sourceCanvas, options = {}) {

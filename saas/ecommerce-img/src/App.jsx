@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy } from 'lucide-react'
 import JSZip from 'jszip'
-import { loadModel, processWithAI, isModelLoaded, getModelStatus } from './ai/waifu2x'
+import { canStreamAiPngExport, loadModel, processWithAI, upscaleWithAIToPng, isModelLoaded, getModelStatus } from './ai/waifu2x'
 import { BROWSER_AI_INPUT_LIMITS, BROWSER_AI_OUTPUT_LIMITS, getAiBackendLabel, getAiModelInputDimensions, getAiOutputMode, getAiRuntimeErrorMessage } from './ai/runtimePolicy'
 import FormatConverter from './tools/FormatConverter'
 import ContactPage from './tools/ContactPage'
@@ -256,6 +256,8 @@ const PAGE_META = {
     const [progress, setProgress] = useState(0)
     const [processStage, setProcessStage] = useState('')
   const [result, setResult] = useState(null)
+  const [resultBlob, setResultBlob] = useState(null)
+  const [resultIsPreview, setResultIsPreview] = useState(false)
     const [resultDims, setResultDims] = useState(null)
   const [resultSize, setResultSize] = useState(null)
   const [compareSource, setCompareSource] = useState(null)
@@ -307,6 +309,9 @@ const PAGE_META = {
       const aiRuntimeMessage = getAiRuntimeErrorMessage(msg)
       if (aiRuntimeMessage) return aiRuntimeMessage
       if (msg.startsWith('当前设备的 AI 输入上限')) return msg
+      if (/PNG_(COMPRESSION_FAILED|ROW_DATA|ROWS)|INCOMPLETE_(PNG|STREAM)|STREAMING_PNG/.test(msg)) {
+        return '分块 PNG 导出失败，请刷新页面后重试，或降低输出尺寸。'
+      }
       if (msg === 'EXPORT_FAILED') return '图片导出失败，请换成 PNG 或降低输出尺寸后重试。'
       return msg || '处理失败，请换一张图片或降低输出尺寸后重试。'
     }, [])
@@ -448,6 +453,8 @@ const zipDownloadLockRef = useRef(false)
   useEffect(() => {
     singleExportIdRef.current = ''
     setResult(null)
+    setResultBlob(null)
+    setResultIsPreview(false)
     setResultDims(null)
     setResultSize(null)
     setCompareSource(prev => {
@@ -470,6 +477,8 @@ const zipDownloadLockRef = useRef(false)
       setHasLocalizedMoireMask(false)
       setInputDecoding(isHeicFile(f))
       setResult(null)
+      setResultBlob(null)
+      setResultIsPreview(false)
       setResultDims(null)
       setResultSize(null)
       revokeObjectUrl(compareSource)
@@ -512,7 +521,7 @@ const zipDownloadLockRef = useRef(false)
       setFile(null); setPreview(null); setOrigDims(null)
       localizedMoireMaskCanvasRef.current = null
       setHasLocalizedMoireMask(false)
-      setResult(null); setResultDims(null); setResultSize(null); setCompareSource(null); setCompareSourceDims(null); setProcessStage(''); setError(null)
+      setResult(null); setResultBlob(null); setResultIsPreview(false); setResultDims(null); setResultSize(null); setCompareSource(null); setCompareSourceDims(null); setProcessStage(''); setError(null)
     }, [])
 
   // --- 批量文件处理（含上限检查）---
@@ -593,6 +602,8 @@ const zipDownloadLockRef = useRef(false)
 
   const resetResultState = useCallback(() => {
     setResult(null)
+    setResultBlob(null)
+    setResultIsPreview(false)
     setResultDims(null)
     setResultSize(null)
     setCompareSource(previous => {
@@ -638,6 +649,8 @@ const zipDownloadLockRef = useRef(false)
     localizedMoireMaskCanvasRef.current = null
     setHasLocalizedMoireMask(false)
     setResult(null)
+    setResultBlob(null)
+    setResultIsPreview(false)
     setResultDims(null)
     setResultSize(null)
     revokeObjectUrl(compareSource)
@@ -891,9 +904,13 @@ const zipDownloadLockRef = useRef(false)
       } else if (outputPixels > MAX_OUTPUT_PIXELS) {
         blockReason = `输出预计 ${formatMegapixels(outputPixels)}，浏览器端处理风险太高。请降低倍数或分辨率。`
       } else if (aiOutputMode === 'confirm') {
-        warnings.push(`AI 输出预计 ${formatMegapixels(outputPixels)}，将启用大图安全模式；开始前需要确认高内存风险。`)
+        warnings.push(format === 'png'
+          ? `AI 输出预计 ${formatMegapixels(outputPixels)}，将启用分块 PNG 导出；开始前仍需确认处理风险。`
+          : `AI 输出预计 ${formatMegapixels(outputPixels)}，将启用大图安全模式；${format.toUpperCase()} 仍需完整画布，开始前需要确认高内存风险。`)
       } else if (aiOutputMode === 'safe') {
-        warnings.push(`AI 输出预计 ${formatMegapixels(outputPixels)}，将自动启用大图安全模式，跳过全尺寸锐化、抗锯齿及其他二次像素修复。`)
+        warnings.push(format === 'png'
+          ? `AI 输出预计 ${formatMegapixels(outputPixels)}，将自动分块处理并逐行导出 PNG，避免创建完整输出画布。`
+          : `AI 输出预计 ${formatMegapixels(outputPixels)}，将自动启用大图安全模式；${format.toUpperCase()} 导出仍需完整画布。`)
       } else if (outputPixels > WARN_OUTPUT_PIXELS) {
         warnings.push(`输出预计 ${formatMegapixels(outputPixels)}，处理会更慢，也会占用更多内存。`)
       }
@@ -905,7 +922,7 @@ const zipDownloadLockRef = useRef(false)
       }
 
       return { outputPixels, inputPixels, inputEdge, aiOutputMode, warnings, blockReason }
-    }, [origDims, expectedOutput, aiUpscale, aiInputLimits, cropEnabled, cropRect])
+    }, [origDims, expectedOutput, aiUpscale, aiInputLimits, cropEnabled, cropRect, format])
 
   const sourceDimsForPreview = useMemo(() => (
     getSourceDims(origDims, cropEnabled, cropRect)
@@ -1104,6 +1121,11 @@ const zipDownloadLockRef = useRef(false)
 
           onStage?.('放大图片')
 
+          const useStreamingPng = doEnhance.aiUpscale
+            && doEnhance.largeOutputSafeMode
+            && fmt === 'png'
+            && canStreamAiPngExport()
+
           // Pre-sharpen original image before upscaling
           if (!largeOutputSafeMode && doEnhance.smartSharpen && passes > 0 && !isTextMode && !doEnhance.smartDenoise) {
             const preData = srcCtx.getImageData(0, 0, sourceW, sourceH)
@@ -1134,6 +1156,34 @@ const zipDownloadLockRef = useRef(false)
                 modelInputContext.drawImage(aiCanvas, 0, 0, modelInputCanvas.width, modelInputCanvas.height)
                 aiCanvas = modelInputCanvas
                 if (largeOutputSafeMode) await new Promise(resolveFrame => requestAnimationFrame(resolveFrame))
+              }
+              if (useStreamingPng && i === aiPasses - 1) {
+                const aiData = aiCanvas.getContext('2d').getImageData(0, 0, aiCanvas.width, aiCanvas.height)
+                onStage?.('AI 分块处理并导出 PNG')
+                const streamed = await upscaleWithAIToPng(aiData, targetW, targetH, {
+                  detailMode: doEnhance.aiDetailMode || 'preserve',
+                  previewMaxEdge: 1600,
+                  onProgress: ({ completed, total }) => {
+                    if (total > 1) onStage?.(`AI 分块导出 ${completed}/${total}`)
+                  },
+                })
+                const previewUrl = URL.createObjectURL(streamed.previewBlob)
+                aiData.data.fill(0)
+                if (aiCanvas !== srcCanvas) {
+                  aiCanvas.width = 0
+                  aiCanvas.height = 0
+                }
+                srcCanvas.width = 0
+                srcCanvas.height = 0
+                resolve({
+                  dataUrl: previewUrl,
+                  blob: streamed.blob,
+                  width: streamed.width,
+                  height: streamed.height,
+                  size: streamed.size,
+                  streaming: true,
+                })
+                return
               }
               const previousAiCanvas = aiCanvas
               let aiData = aiCanvas.getContext('2d').getImageData(0, 0, aiCanvas.width, aiCanvas.height)
@@ -1951,6 +2001,8 @@ const zipDownloadLockRef = useRef(false)
       setProcessStage('准备处理')
       setError(null)
       setResult(null)
+      setResultBlob(null)
+      setResultIsPreview(false)
 
     let p = 0
     const tick = () => {
@@ -2001,6 +2053,8 @@ const zipDownloadLockRef = useRef(false)
         setProcessStage('导出结果')
         await new Promise(r => setTimeout(r, 100))
         setResult(res.dataUrl)
+        setResultBlob(res.blob)
+        setResultIsPreview(!!res.streaming)
       setResultDims({ w: res.width, h: res.height })
       const sizeKB = res.size < 1024 * 1024
         ? (res.size / 1024).toFixed(1) + ' KB'
@@ -2127,13 +2181,15 @@ const zipDownloadLockRef = useRef(false)
 
   // --- 单图下载 ---
   const handleDownload = () => {
-    if (!result) return
+    if (!result && !resultBlob) return
     const a = document.createElement('a')
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
     const name = file ? file.name.replace(/\.[^.]+$/, '') : 'image'
     a.download = `${name}_${resultDims ? resultDims.w + 'x' + resultDims.h : 'result'}.${ext}`
-    a.href = result
+    const downloadUrl = resultBlob ? URL.createObjectURL(resultBlob) : result
+    a.href = downloadUrl
     a.click()
+    if (resultBlob) setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
     const exportId = singleExportIdRef.current || createExportId()
     singleExportIdRef.current = exportId
     trackEvent('download_success', { mode: 'single', format })
@@ -2156,12 +2212,14 @@ const zipDownloadLockRef = useRef(false)
 
   // --- 单图下载（批量用）---
   const downloadSingleResult = (item, index) => {
-    if (!item.result) return
+    if (!item.result && !item.resultBlob) return
     const a = document.createElement('a')
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
     a.download = renderFileName(item, index || 0) + '.' + ext
-    a.href = item.result
+    const downloadUrl = item.resultBlob ? URL.createObjectURL(item.resultBlob) : item.result
+    a.href = downloadUrl
     a.click()
+    if (item.resultBlob) setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
     const exportId = item.exportId || `batch-${item.id}`
     trackEvent('download_success', { mode: 'batch_single', format })
     trackEvent('exported_image', { mode: 'batch_single', format, count: 1, eventId: `e_${exportId}-image` })
@@ -2173,7 +2231,7 @@ const zipDownloadLockRef = useRef(false)
     zipDownloadLockRef.current = true
     setZipDownloading(true)
     try {
-    const doneItems = batchItems.filter(it => it.status === 'done' && it.result)
+    const doneItems = batchItems.filter(it => it.status === 'done' && (it.resultBlob || it.result))
     if (doneItems.length === 0) { alert('没有可下载的图片'); return }
 
     const zip = new JSZip()
@@ -3078,6 +3136,7 @@ const zipDownloadLockRef = useRef(false)
                 <div className="flex items-center gap-2 mb-2.5">
                   <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{'\u653e\u5927\u540e'}</span>
                   <span className="text-[10px] text-gray-400">{resultDims.w}&times;{resultDims.h}px</span>
+                  {resultIsPreview && <span className="text-[10px] text-amber-600">流式导出预览</span>}
                 </div>
                 <div ref={rightScrollRef}
                   onScroll={() => { if (syncingRef.current || !syncedScroll) return; syncingRef.current = true; const s = rightScrollRef.current, t = leftScrollRef.current; if (s && t) { const pctX = s.scrollWidth > s.clientWidth ? s.scrollLeft / (s.scrollWidth - s.clientWidth) : 0; const pctY = s.scrollHeight > s.clientHeight ? s.scrollTop / (s.scrollHeight - s.clientHeight) : 0; if (t.scrollWidth > t.clientWidth) t.scrollLeft = pctX * (t.scrollWidth - t.clientWidth); if (t.scrollHeight > t.clientHeight) t.scrollTop = pctY * (t.scrollHeight - t.clientHeight); } requestAnimationFrame(() => { syncingRef.current = false; }); }}
@@ -3104,6 +3163,11 @@ const zipDownloadLockRef = useRef(false)
               <img src={result} alt="\u653e\u5927\u7ed3\u679c" className="w-full h-auto max-h-96 object-contain mx-auto cursor-pointer"
                 onClick={() => { setModalMode('single'); setShowModal(true); setImgZoom(1); setImgPan({x:0,y:0}); }} />
             </div>
+            {resultIsPreview && (
+              <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                超大 PNG 已按分块生成；页面显示的是轻量预览，下载文件保留完整 {resultDims.w}&times;{resultDims.h}px 分辨率。
+              </p>
+            )}
             <button onClick={handleDownload}
               className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors">
               <Download className="w-4 h-4" /> 下载 {format === 'jpeg' ? 'JPG' : format.toUpperCase()}
@@ -3358,6 +3422,7 @@ const zipDownloadLockRef = useRef(false)
               <div className="px-4 py-2 flex items-center gap-2 shrink-0">
                 <span className="text-[10px] font-semibold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded">{'\u653e\u5927\u540e'}</span>
                 <span className="text-[10px] text-white/40">{resultDims.w}&times;{resultDims.h}px</span>
+                {resultIsPreview && <span className="text-[10px] text-amber-300">流式导出预览</span>}
               </div>
               <div ref={fsRightScrollRef}
                 onScroll={() => { if (fsSyncingRef.current || !syncedScroll) return; fsSyncingRef.current = true; const s = fsRightScrollRef.current, t = fsLeftScrollRef.current; if (s && t) { const pctX = s.scrollWidth > s.clientWidth ? s.scrollLeft / (s.scrollWidth - s.clientWidth) : 0; const pctY = s.scrollHeight > s.clientHeight ? s.scrollTop / (s.scrollHeight - s.clientHeight) : 0; if (t.scrollWidth > t.clientWidth) t.scrollLeft = pctX * (t.scrollWidth - t.clientWidth); if (t.scrollHeight > t.clientHeight) t.scrollTop = pctY * (t.scrollHeight - t.clientHeight); } requestAnimationFrame(() => { fsSyncingRef.current = false; }); }}
