@@ -25,6 +25,8 @@ const TOOL_NAV = [
   { id: 'contact', label: '反馈联系', path: '/contact' },
 ]
 
+const trackUpscaleFeature = (feature) => trackEvent('feature_click', { tool: 'upscale', feature })
+
 const CROP_PRESETS = [
   { id: 'free', label: '自由', ratio: null, w: null, h: null },
   { id: '1-1', label: '1:1 方图', ratio: 1, w: 1080, h: 1080 },
@@ -732,6 +734,7 @@ const zipDownloadLockRef = useRef(false)
 
   // --- 智能检测（分析图片并自动推荐增强选项）---
   const handleSmartDetect = useCallback(() => {
+    trackUpscaleFeature('smart_detect')
     let items = []
     if (batchMode) {
       items = batchItems.filter(it => it.preview && it.origDims)
@@ -2386,7 +2389,7 @@ const zipDownloadLockRef = useRef(false)
               className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${!batchMode ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
               单图处理
             </button>
-            <button onClick={() => setToolMode(true)}
+            <button onClick={() => { if (!batchMode) trackUpscaleFeature('batch_processing'); setToolMode(true) }}
               className={`py-2.5 rounded-lg text-sm font-semibold border transition-colors ${batchMode ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
               批量处理
             </button>
@@ -2591,6 +2594,7 @@ const zipDownloadLockRef = useRef(false)
                 onChange={(event) => {
                   const enabled = event.target.checked
                   setCropEnabled(enabled)
+                  if (enabled) trackUpscaleFeature('crop')
                   if (enabled && origDims) setCropRect(getDefaultCropRect(origDims.w, origDims.h, cropPreset))
                   resetResultState()
                 }}
@@ -2788,7 +2792,7 @@ const zipDownloadLockRef = useRef(false)
                 <span className="block text-sm font-semibold">照片/图片</span>
                 <span className="mt-1 block text-[11px] leading-5 text-gray-500">保持照片、插画和商品图的颜色、光影、纹理与自然观感。</span>
               </button>
-              <button type="button" onClick={() => setContentType('text')} aria-pressed={contentType === 'text'}
+              <button type="button" onClick={() => { if (contentType !== 'text') trackUpscaleFeature('text_mode'); setContentType('text') }} aria-pressed={contentType === 'text'}
                 className={`rounded-xl border px-4 py-3 text-left transition-colors ${contentType === 'text' ? 'border-indigo-400 bg-indigo-50 text-indigo-800' : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-200 hover:bg-indigo-50/30'}`}>
                 <span className="block text-sm font-semibold">文字/截图</span>
                 <span className="mt-1 block text-[11px] leading-5 text-gray-500">清理截图压缩噪点和扫描灰底，并强化文字边缘、黑白对比与可读性。</span>
@@ -2844,7 +2848,7 @@ const zipDownloadLockRef = useRef(false)
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5">
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                     <input type="checkbox" checked={smartSharpen}
-                      onChange={(e) => setSmartSharpen(e.target.checked)}
+                      onChange={(e) => { const enabled = e.target.checked; setSmartSharpen(enabled); if (enabled) trackUpscaleFeature('smart_sharpen') }}
                       className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
                     <Sparkles className="w-3 h-3 text-amber-400" />{'\u667a\u80fd\u9510\u5316'}
                   </label>
@@ -2876,19 +2880,19 @@ const zipDownloadLockRef = useRef(false)
                   <div className="grid grid-cols-1 gap-2">
                   <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                     <input type="checkbox" checked={reduceArtifacts}
-                      onChange={(e) => setReduceArtifacts(e.target.checked)}
+                      onChange={(e) => { const enabled = e.target.checked; setReduceArtifacts(enabled); if (enabled) trackUpscaleFeature('artifact_reduction') }}
                       className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
                     <span><strong className="font-semibold text-gray-700">减少色块/伪影</strong><span className="mt-0.5 block leading-4 text-gray-400">放大前减轻 JPEG 压缩色块和细小噪声。</span></span>
                   </label>
                     <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                       <input type="checkbox" checked={smartDenoise}
-                        onChange={(e) => setSmartDenoise(e.target.checked)}
+                        onChange={(e) => { const enabled = e.target.checked; setSmartDenoise(enabled); if (enabled) trackUpscaleFeature('smart_denoise') }}
                         className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
                       <span><strong className="font-semibold text-gray-700">智能降噪（夜景 / 高 ISO）</strong><span className="mt-0.5 block leading-4 text-gray-400">优先减少彩色噪点，降低亮度平滑，并自动恢复树皮、毛发等真实边缘。</span></span>
                     </label>
                     <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                       <input type="checkbox" checked={faceAwareProtection}
-                        onChange={(e) => setFaceAwareProtection(e.target.checked)}
+                        onChange={(e) => { const enabled = e.target.checked; setFaceAwareProtection(enabled); if (enabled) trackUpscaleFeature('face_protection') }}
                         className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
                       <span><strong className="font-semibold text-indigo-700">人脸智能保护</strong><span className="mt-0.5 block leading-4 text-gray-400">单独控制是否加载本地人脸模型。开启后保护五官线条，并把净化重点放在皮肤区域；关闭后使用普通全图处理。</span></span>
                     </label>
@@ -2965,7 +2969,7 @@ const zipDownloadLockRef = useRef(false)
                 <div className="border-t border-gray-100 pt-3">
                   <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2.5 text-[11px] text-gray-600 cursor-pointer select-none">
                     <input type="checkbox" checked={localizedChromaMoire}
-                      onChange={(event) => setLocalizedChromaMoire(event.target.checked)}
+                      onChange={(event) => { const enabled = event.target.checked; setLocalizedChromaMoire(enabled); if (enabled) trackUpscaleFeature('moire_repair') }}
                       className="mt-0.5 h-3.5 w-3.5 rounded border-gray-300 text-indigo-500" />
                     <span>
                       <strong className="font-semibold text-indigo-700">彩色摩尔纹修复（测试版）</strong>
@@ -3001,13 +3005,13 @@ const zipDownloadLockRef = useRef(false)
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                     <input type="checkbox" checked={autoLevels}
-                      onChange={(e) => setAutoLevels(e.target.checked)}
+                      onChange={(e) => { const enabled = e.target.checked; setAutoLevels(enabled); if (enabled) trackUpscaleFeature('auto_levels') }}
                       className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
                     {'\u81ea\u52a8\u8272\u9636'}
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                     <input type="checkbox" checked={vibrance}
-                      onChange={(e) => setVibrance(e.target.checked)}
+                      onChange={(e) => { const enabled = e.target.checked; setVibrance(enabled); if (enabled) trackUpscaleFeature('natural_saturation') }}
                       className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
                     {'\u81ea\u7136\u9971\u548c\u5ea6'}
                   </label>
@@ -3023,7 +3027,10 @@ const zipDownloadLockRef = useRef(false)
                       onChange={(e) => {
                         const enabled = e.target.checked
                         setAiUpscale(enabled)
-                        if (enabled) trackEvent('ai_enabled')
+                        if (enabled) {
+                          trackEvent('ai_enabled')
+                          trackUpscaleFeature('ai_upscale')
+                        }
                       }}
                       className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
                     AI{'\u653e\u5927'}
@@ -3031,7 +3038,7 @@ const zipDownloadLockRef = useRef(false)
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                     <input type="checkbox" checked={antiAlias}
-                      onChange={(e) => setAntiAlias(e.target.checked)}
+                      onChange={(e) => { const enabled = e.target.checked; setAntiAlias(enabled); if (enabled) trackUpscaleFeature('anti_alias') }}
                       className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
                     {'\u6297\u952f\u9f7f'}
                   </label>
@@ -3078,7 +3085,7 @@ const zipDownloadLockRef = useRef(false)
                     <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                       <input type="checkbox" checked={repairColorFringes}
                         disabled={!aiUpscale}
-                        onChange={(e) => setRepairColorFringes(e.target.checked)}
+                        onChange={(e) => { const enabled = e.target.checked; setRepairColorFringes(enabled); if (enabled) trackUpscaleFeature('color_fringe_repair') }}
                         className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40" />
                       <span><strong className="font-semibold text-gray-700">修复放大色边（测试版）</strong><span className="mt-0.5 block leading-4 text-gray-400">仅校正 AI 放大后高反差边缘的异常色块，保留亮度与纹理。</span></span>
                     </label>

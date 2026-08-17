@@ -25,6 +25,7 @@ No image content, file names, email addresses, or user IDs are collected.
 
 - `page_view`
 - `session_start`
+- `feature_click` (counts explicit activation/clicks for fixed features inside the image upscaler; toggle features count only when enabled)
 - `image_uploaded`
 - `ai_enabled`
 - `crop_preset_selected`
@@ -41,4 +42,4 @@ No image content, file names, email addresses, or user IDs are collected.
 - `exported_image`
 - `survey_submit`
 
-Events are split into `upscale`, `converter`, `product_image`, `contact`, and compatible `unknown` historical data. Only fixed categorical analytics dimensions are stored; arbitrary paths, file names, image content, contact details, and raw user identities are not included in the dashboard response.
+Events are split into `upscale`, `converter`, `product_image`, `contact`, and compatible `unknown` historical data. The dashboard shows cumulative and today counts for fixed image-upscaler features such as crop, smart detection, smart denoise, moire repair, AI upscale, and color-fringe repair. Only fixed categorical analytics dimensions are stored; arbitrary button text, paths, file names, image content, contact details, and raw user identities are not included in the dashboard response.

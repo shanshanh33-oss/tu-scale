@@ -1,6 +1,7 @@
 const ALLOWED_EVENTS = new Set([
   'page_view',
   'session_start',
+  'feature_click',
   'image_uploaded',
   'ai_enabled',
   'crop_preset_selected',
@@ -26,6 +27,22 @@ const MAX_BATCH_EVENTS = 5
 const SOURCE_VALUES = new Set(['direct', 'google', 'baidu', 'external'])
 const EDITION_VALUES = new Set(['desktop', 'mobile'])
 const ERROR_CODES = new Set(['image_decode', 'file_read', 'canvas_limit', 'ai_input_limit', 'ai_model', 'export', 'network', 'api_limit', 'unsupported_format', 'unknown'])
+const FEATURE_VALUES = new Set([
+  'batch_processing',
+  'crop',
+  'text_mode',
+  'smart_detect',
+  'smart_sharpen',
+  'artifact_reduction',
+  'smart_denoise',
+  'face_protection',
+  'moire_repair',
+  'auto_levels',
+  'natural_saturation',
+  'ai_upscale',
+  'anti_alias',
+  'color_fringe_repair',
+])
 
 const clampInteger = (value, min, max) => {
   const parsed = Number.parseInt(value, 10)
@@ -86,6 +103,9 @@ const normalizeEventPayload = (item) => {
   const sessionId = String(data.sessionId || '').trim()
   const eventId = String(item?.eventId || data.eventId || '').trim()
   const tool = normalizeTool(String(data.tool || '').trim())
+  const feature = String(data.feature || '').trim()
+
+  if (event === 'feature_click' && (!FEATURE_VALUES.has(feature) || tool !== 'upscale')) return null
 
   return {
     event,
@@ -106,6 +126,7 @@ const normalizeEventPayload = (item) => {
       duration: bucketDuration(data.durationMs),
       downloadDelay: bucketDuration(data.downloadDelayMs),
       errorCode: ERROR_CODES.has(data.errorCode) ? data.errorCode : '',
+      feature: event === 'feature_click' ? feature : '',
     },
   }
 }

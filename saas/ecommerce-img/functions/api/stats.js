@@ -3,6 +3,7 @@ import { createAdminSession, getAdminAuth, renderAdminLogin } from './admin-auth
 const EVENTS = [
   'page_view',
   'session_start',
+  'feature_click',
   'image_uploaded',
   'ai_enabled',
   'crop_preset_selected',
@@ -36,9 +37,27 @@ const TOOL_LABELS = {
   unknown: '未细分旧数据',
 }
 
+const FEATURE_LABELS = {
+  batch_processing: '批量处理',
+  crop: '裁切适配',
+  text_mode: '文字/截图模式',
+  smart_detect: '智能检测',
+  smart_sharpen: '智能锐化',
+  artifact_reduction: '减少色块/伪影',
+  smart_denoise: '智能降噪',
+  face_protection: '人脸智能保护',
+  moire_repair: '彩色摩尔纹修复',
+  auto_levels: '自动色阶',
+  natural_saturation: '自然饱和度',
+  ai_upscale: 'AI 放大',
+  anti_alias: '抗锯齿',
+  color_fringe_repair: '修复放大色边',
+}
+
 const LABELS = {
   page_view: '页面浏览事件',
   session_start: '访问会话',
+  feature_click: '图片放大内部功能启用/点击',
   unique_visitor: '独立访客（6月28日起）',
   image_uploaded: '上传图片数',
   ai_enabled: '开启 AI',
@@ -578,6 +597,10 @@ const renderStatsShell = () => `<!doctype html>
       <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>首次导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
     <section>
+      <div class="section-head"><h2>图片放大内部功能点击</h2><p>开关类只在用户主动开启时计数，关闭不重复计数。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计启用/点击</th><th>今日启用/点击</th></tr></thead><tbody id="featureRows"></tbody></table></div>
+    </section>
+    <section>
       <div class="section-head"><h2>商业行为信号</h2><p>按匿名事件汇总，用于判断套餐与积分需求。</p></div>
       <div class="table-wrap"><table><thead><tr><th>指标</th><th>分布</th></tr></thead><tbody id="businessRows"></tbody></table></div>
     </section>
@@ -597,13 +620,14 @@ const renderStatsShell = () => `<!doctype html>
     const TOOLS = ${JSON.stringify(TOOLS)};
     const LABELS = ${JSON.stringify(LABELS)};
     const TOOL_LABELS = ${JSON.stringify(TOOL_LABELS)};
+    const FEATURE_LABELS = ${JSON.stringify(FEATURE_LABELS)};
     const STATS_TOKEN = new URLSearchParams(window.location.search).get('token') || '';
     const ANOMALOUS_DAYS = { '2026-07-12': '旧版 ZIP 重复触发：426 不是不同图片的成功导出数' };
     const emptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [metric, 0]));
     const emptyTools = () => Object.fromEntries(TOOLS.map((tool) => [tool, emptyMetrics()]));
     const BUSINESS_LABELS = { source: '来源渠道', scale: '放大倍率', aiMode: 'AI 模式', aiDetailMode: 'AI 细节模式', inputPixels: '原图像素档', outputPixels: '输出像素档', batchSize: '批量张数', duration: '处理耗时', downloadDelay: '下载前停留', errorCode: '失败原因' };
     const BUSINESS_VALUE_LABELS = { edition: { desktop: '电脑版', mobile: '手机版' } };
-    const BUSINESS_FIELDS = ['edition', ...Object.keys(BUSINESS_LABELS)];
+    const BUSINESS_FIELDS = ['edition', 'feature', ...Object.keys(BUSINESS_LABELS)];
     const emptyBusiness = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]));
     const STATS_START_DATE = '${STATS_START_DATE}';
     const HISTORICAL_BACKFILL = { start: '2026-06-28', end: '2026-07-15' };
@@ -681,6 +705,7 @@ const renderStatsShell = () => `<!doctype html>
         const todayValue = today.tools?.[tool] || emptyMetrics();
         return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(todayValue.exported_image) + '</td></tr>';
       }).join('');
+      document.getElementById('featureRows').innerHTML = Object.entries(FEATURE_LABELS).map(([feature, label]) => '<tr><td><b>' + label + '</b></td><td>' + fmt(totalBusiness.feature[feature]) + '</td><td>' + fmt(today.business?.feature?.[feature]) + '</td></tr>').join('');
       document.getElementById('businessRows').innerHTML = Object.entries(BUSINESS_LABELS).map(([field, label]) => {
         const values = Object.entries(totalBusiness[field]).sort((a, b) => b[1] - a[1]);
         return '<tr><td><b>' + label + '</b></td><td>' + (values.length ? values.map(([key, value]) => (BUSINESS_VALUE_LABELS[field]?.[key] || key) + '：' + fmt(value)).join(' / ') : '暂无数据') + '</td></tr>';
@@ -705,7 +730,7 @@ const renderStatsShell = () => `<!doctype html>
       const metadataReads = days.reduce((total, day) => total + day.metadataReadCount, 0);
       const finalizedDays = days.filter((day) => day.settlementStatus === 'finalized').length;
       const pendingDays = days.filter((day) => day.settlementStatus === 'pending').length;
-      document.getElementById('note').textContent = '口径说明：当天事件实时分页汇总，过往日期在首次查看时自动补算并保存每日汇总。当前已结算 ' + fmt(finalizedDays) + ' 天，等待历史汇总 ' + fmt(pendingDays) + ' 天。成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已汇总原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
+      document.getElementById('note').textContent = '口径说明：图片放大内部功能使用固定匿名标识汇总；开关类只在用户主动开启时计数，关闭不计数。当天事件实时分页汇总，过往日期在首次查看时自动补算并保存每日汇总。当前已结算 ' + fmt(finalizedDays) + ' 天，等待历史汇总 ' + fmt(pendingDays) + ' 天。成功下载操作只在浏览器成功生成下载内容后记录；首次导出图片按同一处理结果去重。download/download_zip 是旧版点击口径，仅供历史参考。已汇总原始日志 ' + fmt(eventLogs) + ' 条，其中旧格式 ' + fmt(legacyReads) + ' 条，新格式 ' + fmt(metadataReads) + ' 条。接口只返回按天散列的访客键，不返回原始访客标识。';
     };
 
     document.getElementById('backfill').addEventListener('click', async () => {

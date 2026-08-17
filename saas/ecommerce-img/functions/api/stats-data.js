@@ -3,6 +3,7 @@ import { getAdminAuth } from './admin-auth.js'
 const EVENTS = [
   'page_view',
   'session_start',
+  'feature_click',
   'image_uploaded',
   'ai_enabled',
   'crop_preset_selected',
@@ -60,7 +61,7 @@ const createEmptyMetrics = () => Object.fromEntries(METRICS.map((metric) => [met
 
 const createToolBreakdown = () => Object.fromEntries(TOOLS.map((tool) => [tool, createEmptyMetrics()]))
 
-const BUSINESS_FIELDS = ['edition', 'source', 'scale', 'aiMode', 'aiDetailMode', 'inputPixels', 'outputPixels', 'batchSize', 'duration', 'downloadDelay', 'errorCode']
+const BUSINESS_FIELDS = ['edition', 'source', 'scale', 'aiMode', 'aiDetailMode', 'inputPixels', 'outputPixels', 'batchSize', 'duration', 'downloadDelay', 'errorCode', 'feature']
 const createBusinessSummary = () => Object.fromEntries(BUSINESS_FIELDS.map((field) => [field, {}]))
 
 const normalizeEvent = (event) => EVENTS.includes(event) ? event : ''
