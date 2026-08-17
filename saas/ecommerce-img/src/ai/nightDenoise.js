@@ -10,6 +10,14 @@ const getChroma = (data, offset, luma) => ({
   cr: data[offset] - luma,
 })
 
+const getDirectionalScaleCoherence = (fineGradient, coarseGradient) => {
+  if (fineGradient * coarseGradient <= 0) return 0
+  const fineMagnitude = Math.abs(fineGradient)
+  const coarseMagnitude = Math.abs(coarseGradient) * 0.5
+  return Math.min(fineMagnitude, coarseMagnitude)
+    / Math.max(0.0001, fineMagnitude, coarseMagnitude)
+}
+
 const histogramPercentile = (histogram, sampleCount, percentile) => {
   if (sampleCount <= 0) return 0
   const target = Math.max(1, Math.ceil(sampleCount * percentile))
@@ -170,12 +178,14 @@ export const applyNightDenoiseFilter = (imageData, options = {}) => {
   // The user explicitly opted into denoise, so locally-flat dark regions get
   // a useful baseline even when a camera/JPEG pipeline has correlated the grain.
   const baseLumaBlend = enoughSamples
-    ? (0.36 + lumaActivation * 0.42) * strengthResponse
+    ? (0.24 + lumaActivation * 0.3) * strengthResponse
     : 0
   const baseChromaBlend = enoughSamples
     ? (0.28 + chromaActivation * 0.48) * strengthResponse
     : 0
   const strengthScale = clamp(options.strengthScale ?? 1, 0.25, 1.25)
+  const lumaStrengthScale = clamp(options.lumaStrengthScale ?? 1, 0, 1.25)
+  const chromaStrengthScale = clamp(options.chromaStrengthScale ?? 1, 0, 1.25)
   const skinStrength = clamp01(options.skinStrength ?? 0.6)
   const output = new Uint8ClampedArray(data)
   const radius = 2
@@ -228,6 +238,10 @@ export const applyNightDenoiseFilter = (imageData, options = {}) => {
             Math.abs(luma[topIndex] - luma[bottomIndex]),
             Math.abs(centerLuma - neighborLuma),
           )
+          const directionalGradient = Math.max(
+            Math.abs(luma[leftIndex] - luma[rightIndex]),
+            Math.abs(luma[topIndex] - luma[bottomIndex]),
+          )
           const darkness = clamp01((215 - centerLuma) / 175)
           // Fine high-ISO grain also raises the local gradient. Allow for the
           // measured noise floor before deciding that a pixel is a real edge.
@@ -235,13 +249,16 @@ export const applyNightDenoiseFilter = (imageData, options = {}) => {
           const flatness = 1 - clamp01(
             (gradient - 2 - noiseGradientAllowance) / (34 + estimate.lumaNoise),
           )
+          const edgeProtection = clamp01(
+            (directionalGradient - 3 - estimate.lumaNoise * 0.55) / (18 + estimate.lumaNoise),
+          )
           const saturation = Math.max(data[sourceOffset], data[sourceOffset + 1], data[sourceOffset + 2])
             - Math.min(data[sourceOffset], data[sourceOffset + 1], data[sourceOffset + 2])
           const colourProtection = 1 - 0.65 * clamp01((saturation - 50) / 100)
           const skin = sampleSkinMask(options.faceSkinMask, x, y, width, height)
 
-          let chromaBlend = baseChromaBlend * strengthScale * darkness * (0.18 + 0.82 * flatness) * colourProtection
-          let lumaBlend = baseLumaBlend * strengthScale * darkness * flatness
+          let chromaBlend = baseChromaBlend * strengthScale * chromaStrengthScale * darkness * (0.18 + 0.82 * flatness) * colourProtection
+          let lumaBlend = baseLumaBlend * strengthScale * lumaStrengthScale * darkness * flatness * (1 - 0.82 * edgeProtection)
           chromaBlend *= 1 + skin * skinStrength * 0.18
           lumaBlend *= 1 - skin * 0.25
 
@@ -289,7 +306,7 @@ export const applyNightDenoiseFilter = (imageData, options = {}) => {
             )
             if (neighborSpread < Math.max(18, estimate.chromaNoise * 2.5)) {
               chromaBlend = Math.max(chromaBlend, 0.9 * strengthScale)
-              lumaBlend = Math.max(lumaBlend, 0.32 * strengthScale)
+              lumaBlend = Math.max(lumaBlend, 0.16 * strengthScale * lumaStrengthScale)
               targetCb = neighborCb
               targetCr = neighborCr
               targetLuma = neighborLuma
@@ -328,6 +345,163 @@ export const applyNightDenoiseFilter = (imageData, options = {}) => {
       changedPixels,
       hotPixels,
     })
+  }
+
+  return createResultImageData(output, width, height)
+}
+
+/**
+ * Recover directional detail after denoising without bringing flat-area grain
+ * back. When the pre-denoise source is available, only the source detail that
+ * is still supported by a coherent edge in the filtered image is mixed back.
+ * This avoids trying to recreate lost texture with global sharpening.
+ */
+export const recoverNightDenoiseDetails = (imageData, options = {}) => {
+  const { data, width, height } = imageData
+  if (!data || width < 3 || height < 3) return imageData
+
+  const estimate = options.noiseEstimate || estimateNightNoise(imageData)
+  const sourceImageData = options.sourceImageData
+  const hasSource = sourceImageData?.data
+    && sourceImageData.width === width
+    && sourceImageData.height === height
+  const sourceData = hasSource ? sourceImageData.data : null
+  const sourceEstimate = hasSource
+    ? (options.sourceNoiseEstimate || estimateNightNoise(sourceImageData))
+    : estimate
+  const requestedStrength = clamp(options.strength ?? 0.75, 0.35, 1)
+  const amount = clamp(options.amount ?? (0.32 + requestedStrength * 0.26), 0, 0.7)
+  const sourceRestoreAmount = clamp(amount * 0.9, 0, 0.65)
+  const detailThreshold = Math.max(2, estimate.lumaNoise * 0.35)
+  const sourceDetailThreshold = Math.max(2.25, sourceEstimate.lumaNoise * 0.42)
+  const output = new Uint8ClampedArray(data)
+
+  const inset = hasSource && width >= 5 && height >= 5 ? 2 : 1
+  for (let y = inset; y < height - inset; y++) {
+    for (let x = inset; x < width - inset; x++) {
+      const offset = (y * width + x) * 4
+      if (data[offset + 3] === 0) continue
+      const leftOffset = offset - 4
+      const rightOffset = offset + 4
+      const topOffset = offset - width * 4
+      const bottomOffset = offset + width * 4
+      const center = getLuma(data, offset)
+      const left = getLuma(data, leftOffset)
+      const right = getLuma(data, rightOffset)
+      const top = getLuma(data, topOffset)
+      const bottom = getLuma(data, bottomOffset)
+      const blurred = (center * 4 + (left + right + top + bottom) * 2) / 12
+      const detail = center - blurred
+      const directionalGradient = Math.max(Math.abs(left - right), Math.abs(top - bottom))
+
+      if (hasSource) {
+        const farLeftOffset = offset - 8
+        const farRightOffset = offset + 8
+        const farTopOffset = offset - width * 8
+        const farBottomOffset = offset + width * 8
+        const sourceCenter = getLuma(sourceData, offset)
+        const sourceLeft = getLuma(sourceData, leftOffset)
+        const sourceRight = getLuma(sourceData, rightOffset)
+        const sourceTop = getLuma(sourceData, topOffset)
+        const sourceBottom = getLuma(sourceData, bottomOffset)
+        const sourceBlurred = (
+          sourceCenter * 4
+          + (sourceLeft + sourceRight + sourceTop + sourceBottom) * 2
+        ) / 12
+        const sourceDetail = sourceCenter - sourceBlurred
+        const missingDetail = sourceDetail - detail
+        const sourceFarLeft = getLuma(sourceData, farLeftOffset)
+        const sourceFarRight = getLuma(sourceData, farRightOffset)
+        const sourceFarTop = getLuma(sourceData, farTopOffset)
+        const sourceFarBottom = getLuma(sourceData, farBottomOffset)
+        const sourceFineX = sourceRight - sourceLeft
+        const sourceFineY = sourceBottom - sourceTop
+        const sourceCoarseX = sourceFarRight - sourceFarLeft
+        const sourceCoarseY = sourceFarBottom - sourceFarTop
+        const sourceCoarseGradient = Math.max(
+          Math.abs(sourceCoarseX),
+          Math.abs(sourceCoarseY),
+        ) * 0.5
+        const sourceDirectionalGradient = Math.max(
+          Math.abs(sourceFineX),
+          Math.abs(sourceFineY),
+        )
+        const filteredFarLeft = getLuma(data, farLeftOffset)
+        const filteredFarRight = getLuma(data, farRightOffset)
+        const filteredFarTop = getLuma(data, farTopOffset)
+        const filteredFarBottom = getLuma(data, farBottomOffset)
+        const filteredFineX = right - left
+        const filteredFineY = bottom - top
+        const filteredCoarseX = filteredFarRight - filteredFarLeft
+        const filteredCoarseY = filteredFarBottom - filteredFarTop
+        const filteredCoarseGradient = Math.max(
+          Math.abs(filteredCoarseX),
+          Math.abs(filteredCoarseY),
+        ) * 0.5
+        const sourceScaleCoherence = Math.max(
+          getDirectionalScaleCoherence(sourceFineX, sourceCoarseX),
+          getDirectionalScaleCoherence(sourceFineY, sourceCoarseY),
+        )
+        const filteredScaleCoherence = Math.max(
+          getDirectionalScaleCoherence(filteredFineX, filteredCoarseX),
+          getDirectionalScaleCoherence(filteredFineY, filteredCoarseY),
+        )
+        const scaleCoherence = Math.sqrt(sourceScaleCoherence * filteredScaleCoherence)
+        const filteredStructure = Math.max(filteredCoarseGradient, directionalGradient * 0.72)
+        const sourceStructureEvidence = Math.max(sourceCoarseGradient, sourceDirectionalGradient * 0.72)
+        const sourceStructure = clamp01(
+          (sourceStructureEvidence - sourceDetailThreshold * 0.35)
+          / (11 + sourceEstimate.lumaNoise * 0.65),
+        )
+        const structureSupport = clamp01(
+          (filteredStructure - sourceDetailThreshold * 0.35)
+          / (9 + sourceEstimate.lumaNoise * 0.55),
+        )
+        const detailSupport = clamp01(
+          (Math.abs(sourceDetail) - sourceDetailThreshold * 0.55)
+          / (6 + sourceEstimate.lumaNoise * 0.45),
+        )
+        const signSupport = sourceDetail * detail > 0 ? 1 : 0
+        const structureWeight = Math.sqrt(Math.cbrt(
+          sourceStructure * structureSupport * detailSupport,
+        )) * signSupport
+
+        if (structureWeight > 0.001 && Math.abs(missingDetail) > 0.05 && scaleCoherence > 0.55) {
+          const darkProtection = 0.58 + 0.42 * clamp01((center - 12) / 108)
+          const maxDelta = Math.min(7, 2.5 + sourceEstimate.lumaNoise * 0.45)
+          const delta = clamp(
+            missingDetail * sourceRestoreAmount * structureWeight * darkProtection,
+            -maxDelta,
+            maxDelta,
+          )
+          // ImageData is 8-bit. Preserve a supported sub-pixel residual as one
+          // luminance step, otherwise useful bark/hair texture rounds to zero.
+          const quantizedDelta = Math.abs(delta) >= 0.5
+            ? Math.round(delta)
+            : Math.abs(missingDetail) > 0.35 && structureWeight > 0.34 && scaleCoherence > 0.65
+              ? Math.sign(missingDetail)
+              : 0
+          if (quantizedDelta !== 0) {
+            output[offset] = Math.round(clamp(data[offset] + quantizedDelta, 0, 255))
+            output[offset + 1] = Math.round(clamp(data[offset + 1] + quantizedDelta, 0, 255))
+            output[offset + 2] = Math.round(clamp(data[offset + 2] + quantizedDelta, 0, 255))
+          }
+        }
+        continue
+      }
+
+      const edgeWeight = clamp01((directionalGradient - detailThreshold) / (14 + estimate.lumaNoise * 0.8))
+      const detailWeight = clamp01((Math.abs(detail) - detailThreshold) / (7 + estimate.lumaNoise * 0.45))
+      if (edgeWeight <= 0 || detailWeight <= 0) continue
+
+      const darkProtection = 0.28 + 0.72 * clamp01((center - 18) / 112)
+      const delta = detail * amount * edgeWeight * detailWeight * darkProtection
+      const targetLuma = Math.max(1, center + delta)
+      const ratio = clamp(targetLuma / Math.max(1, center), 0.88, 1.12)
+      output[offset] = Math.round(clamp(data[offset] * ratio, 0, 255))
+      output[offset + 1] = Math.round(clamp(data[offset + 1] * ratio, 0, 255))
+      output[offset + 2] = Math.round(clamp(data[offset + 2] * ratio, 0, 255))
+    }
   }
 
   return createResultImageData(output, width, height)

@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy } from 'lucide-react'
 import JSZip from 'jszip'
 import { canStreamAiPngExport, loadModel, processWithAI, upscaleWithAIToPng, isModelLoaded, getModelStatus } from './ai/waifu2x'
-import { BROWSER_AI_INPUT_LIMITS, BROWSER_AI_OUTPUT_LIMITS, getAiBackendLabel, getAiModelInputDimensions, getAiOutputMode, getAiRuntimeErrorMessage } from './ai/runtimePolicy'
+import { BROWSER_AI_INPUT_LIMITS, BROWSER_AI_OUTPUT_LIMITS, canUseDesktopAiService, getAiBackendLabel, getAiModelInputDimensions, getAiOutputMode, getAiRuntimeErrorMessage } from './ai/runtimePolicy'
 import FormatConverter from './tools/FormatConverter'
 import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
@@ -242,6 +242,7 @@ const PAGE_META = {
   const [clahe] = useState(false)
   const [smartDenoise, setSmartDenoise] = useState(false)
   const [denoiseStrength, setDenoiseStrength] = useState(75)
+  const [denoiseModel, setDenoiseModel] = useState('scunet')
   const [edgeInterpolation, setEdgeInterpolation] = useState(false)
   const [antiAlias, setAntiAlias] = useState(false)
   const [aiModelLoading, setAiModelLoading] = useState(false)
@@ -426,6 +427,7 @@ const zipDownloadLockRef = useRef(false)
         if (s.vibrance !== undefined) setVibrance(s.vibrance)
         if (s.smartDenoise !== undefined) setSmartDenoise(s.smartDenoise)
         if (Number.isFinite(s.denoiseStrength)) setDenoiseStrength(Math.max(35, Math.min(100, s.denoiseStrength)))
+        if (s.denoiseModel === 'scunet' || s.denoiseModel === 'drunet') setDenoiseModel(s.denoiseModel)
         if (s.edgeInterpolation !== undefined) setEdgeInterpolation(s.edgeInterpolation)
         if (s.antiAlias !== undefined) setAntiAlias(s.antiAlias)
         if (s.scaleMode) setScaleMode(s.scaleMode)
@@ -444,10 +446,10 @@ const zipDownloadLockRef = useRef(false)
   // --- 保存设置到 localStorage ---
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
+      scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
       keepRatio, customW, customH, fileNameTemplate
     }))
-  }, [scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
+  }, [scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
 
   // --- 单图模式 effect ---
   useEffect(() => {
@@ -463,7 +465,7 @@ const zipDownloadLockRef = useRef(false)
     })
     setCompareSourceDims(null)
     setProcessStage('')
-  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, contentType, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, edgeInterpolation, antiAlias, cropEnabled, cropRect])
+  }, [scaleMode, scale, targetMode, targetIdx, customW, customH, format, contentType, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, cropEnabled, cropRect])
 
   // --- 单图文件处理 ---
   const handleFile = useCallback(async (f) => {
@@ -1028,7 +1030,7 @@ const zipDownloadLockRef = useRef(false)
           const largeOutputSafeMode = !!doEnhance.largeOutputSafeMode
           const shouldOutputSharpen = !largeOutputSafeMode && doEnhance.smartSharpen && (!doEnhance.smartDenoise || isActualUpscale)
           const outputSharpenAmount = doEnhance.smartDenoise
-            ? Math.min(sharpenAmount * 0.3, 0.35)
+            ? Math.min(sharpenAmount * 0.16, 0.2)
             : sharpenAmount
           const outputSharpenOptions = doEnhance.smartDenoise
             ? { noiseThreshold: 3.5, protectDarkNoise: true }
@@ -1083,6 +1085,28 @@ const zipDownloadLockRef = useRef(false)
           // 照片模式可选地减少 JPEG 色块或夜景噪点；文字模式保持其内置文字清理流程。
           let faceSkinMask = null
           if (!isTextMode && (doEnhance.reduceArtifacts || doEnhance.smartDenoise)) {
+            let localDenoiseApplied = false
+            if (doEnhance.smartDenoise && canUseDesktopAiService()) {
+              const localModelLabel = doEnhance.denoiseModel === 'drunet' ? 'DRUNet' : 'SCUNet'
+              onStage?.(`使用本地 ${localModelLabel} 夜景降噪`)
+              try {
+                const { denoiseCanvasWithLocalAI } = await import('./ai/localDenoise')
+                const denoisedCanvas = await denoiseCanvasWithLocalAI(srcCanvas, {
+                  model: doEnhance.denoiseModel,
+                  strength: doEnhance.denoiseStrength,
+                  clarity: doEnhance.smartSharpen
+                    ? Math.min(0.6, Math.max(0.2, 0.2 + sharpenAmount * 0.22))
+                    : 0,
+                })
+                srcCtx.clearRect(0, 0, sourceW, sourceH)
+                srcCtx.drawImage(denoisedCanvas, 0, 0, sourceW, sourceH)
+                denoisedCanvas.width = 0
+                denoisedCanvas.height = 0
+                localDenoiseApplied = true
+              } catch (localDenoiseError) {
+                console.warn('Local denoise model unavailable, using browser denoise fallback.', localDenoiseError)
+              }
+            }
             let sourceData = srcCtx.getImageData(0, 0, sourceW, sourceH)
             if (useFaceProtection) {
               onStage?.('检测人脸与皮肤区域')
@@ -1101,8 +1125,9 @@ const zipDownloadLockRef = useRef(false)
                 doEnhance.faceSkinStrength,
               )
             }
-            if (doEnhance.smartDenoise) {
-              const { applyNightDenoiseFilter, getNightDenoisePassStrengths } = await import('./ai/nightDenoise')
+            if (doEnhance.smartDenoise && !localDenoiseApplied) {
+              const { applyNightDenoiseFilter, getNightDenoisePassStrengths, recoverNightDenoiseDetails } = await import('./ai/nightDenoise')
+              const denoiseSourceData = sourceData
               const passStrengths = getNightDenoisePassStrengths(doEnhance.denoiseStrength)
               for (let passIndex = 0; passIndex < passStrengths.length; passIndex++) {
                 onStage?.(passStrengths.length > 1
@@ -1113,6 +1138,16 @@ const zipDownloadLockRef = useRef(false)
                   skinStrength: doEnhance.faceSkinStrength,
                   strength: passStrengths[passIndex],
                   strengthScale: doEnhance.aiUpscale ? 0.82 : 1,
+                  lumaStrengthScale: passIndex === 0 ? 0.72 : 0,
+                  chromaStrengthScale: passIndex === 0 ? 1 : 0.82,
+                })
+              }
+              if (doEnhance.smartSharpen) {
+                onStage?.('恢复降噪后的边缘细节')
+                sourceData = recoverNightDenoiseDetails(sourceData, {
+                  sourceImageData: denoiseSourceData,
+                  strength: doEnhance.denoiseStrength,
+                  amount: 0.56,
                 })
               }
             }
@@ -2045,6 +2080,7 @@ const zipDownloadLockRef = useRef(false)
           clahe,
           smartDenoise,
           denoiseStrength: denoiseStrength / 100,
+          denoiseModel,
           edgeInterpolation,
           antiAlias,
           largeOutputSafeMode: aiUpscale && processEstimate?.aiOutputMode !== 'normal',
@@ -2084,7 +2120,7 @@ const zipDownloadLockRef = useRef(false)
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, hasLocalizedMoireMask, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, hasLocalizedMoireMask, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 批量处理 ---
   const handleBatchProcess = useCallback(async () => {
@@ -2138,7 +2174,7 @@ const zipDownloadLockRef = useRef(false)
           await ensureAiModel()
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
           const updateItemStage = (stage) => setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage } : it))
-          const res = await processImageWithCanvas(item.preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength: denoiseStrength / 100, edgeInterpolation, antiAlias, largeOutputSafeMode: aiOutputMode !== 'normal' }, format, cropOptions, updateItemStage)
+          const res = await processImageWithCanvas(item.preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength: denoiseStrength / 100, denoiseModel, edgeInterpolation, antiAlias, largeOutputSafeMode: aiOutputMode !== 'normal' }, format, cropOptions, updateItemStage)
         clearInterval(timer)
 
         const sizeKB = res.size < 1024 * 1024
@@ -2177,7 +2213,7 @@ const zipDownloadLockRef = useRef(false)
 
     batchCancelRef.current = false
     setBatchProcessing(false)
-  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, edgeInterpolation, antiAlias, aiInputLimits, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, aiInputLimits, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
 
   // --- 单图下载 ---
   const handleDownload = () => {
@@ -2825,7 +2861,7 @@ const zipDownloadLockRef = useRef(false)
                 {smartSharpen && (
                   <p className="mt-2 text-[11px] leading-5 text-gray-400">
                     {smartDenoise
-                      ? '夜景降噪开启时会跳过预锐化；仅在实际放大时保留低强度、暗部保护的边缘锐化。'
+                      ? '开启后会在降噪结果中选择性恢复树皮、毛发和轮廓等真实细节；不会重新锐化平坦暗部和彩色噪点。'
                       : '人像建议 0.3–0.5，普通照片 0.5–0.8，插画/文字 0.8–1.4。高倍放大建议从低强度开始。'}
                   </p>
                 )}
@@ -2848,7 +2884,7 @@ const zipDownloadLockRef = useRef(false)
                       <input type="checkbox" checked={smartDenoise}
                         onChange={(e) => setSmartDenoise(e.target.checked)}
                         className="mt-0.5 h-3 w-3 rounded border-gray-300 text-indigo-500" />
-                      <span><strong className="font-semibold text-gray-700">智能降噪（夜景 / 高 ISO）</strong><span className="mt-0.5 block leading-4 text-gray-400">自动分析暗部噪声，优先减少彩色噪点和颗粒，并保护边缘与透明度。</span></span>
+                      <span><strong className="font-semibold text-gray-700">智能降噪（夜景 / 高 ISO）</strong><span className="mt-0.5 block leading-4 text-gray-400">优先减少彩色噪点，降低亮度平滑，并自动恢复树皮、毛发等真实边缘。</span></span>
                     </label>
                     <label className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-2 text-[11px] text-gray-600 cursor-pointer select-none">
                       <input type="checkbox" checked={faceAwareProtection}
@@ -2859,6 +2895,34 @@ const zipDownloadLockRef = useRef(false)
                   </div>
                   {smartDenoise && (
                     <div className="mt-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+                      {canUseDesktopAiService() && (
+                        <div className="mb-3">
+                          <div className="mb-1.5 flex items-center justify-between gap-3">
+                            <span className="text-[11px] font-semibold text-gray-700">本地模型 A/B</span>
+                            <span className="text-[9px] font-medium text-indigo-500">仅本机可用</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1" role="group" aria-label="本地降噪模型">
+                            {[
+                              { value: 'scunet', label: 'SCUNet', tip: '真实噪声' },
+                              { value: 'drunet', label: 'DRUNet', tip: '可调噪声级' },
+                            ].map(option => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                aria-pressed={denoiseModel === option.value}
+                                onClick={() => setDenoiseModel(option.value)}
+                                className={`rounded-md px-2 py-1.5 text-[10px] font-medium transition-colors ${denoiseModel === option.value
+                                  ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-200'
+                                  : 'text-gray-500 hover:text-gray-700'}`}
+                              >
+                                <span className="block text-[11px] font-semibold">{option.label}</span>
+                                <span className="block text-[9px] font-normal text-gray-400">{option.tip}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-1.5 text-[10px] leading-4 text-gray-400">两种模型使用同一强度和输出尺寸，方便直接比较；图片只在本机处理。</p>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between gap-3">
                         <label htmlFor="night-denoise-strength" className="text-[11px] font-semibold text-gray-700">降噪强度</label>
                         <span className="text-[10px] font-medium text-indigo-600">

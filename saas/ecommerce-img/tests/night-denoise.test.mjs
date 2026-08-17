@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { applyNightDenoiseFilter, estimateNightNoise, getNightDenoisePassStrengths } from '../src/ai/nightDenoise.js'
+import { applyNightDenoiseFilter, estimateNightNoise, getNightDenoisePassStrengths, recoverNightDenoiseDetails } from '../src/ai/nightDenoise.js'
 
 test('night denoise reduces dark chroma noise while preserving alpha and a strong edge', () => {
   const width = 128
@@ -92,4 +92,115 @@ test('night denoise detects multi-pixel grain and uses adaptive passes', () => {
   assert.deepEqual(getNightDenoisePassStrengths(0.45), [0.45])
   assert.deepEqual(getNightDenoisePassStrengths(0.75), [0.75, 0.6428571428571429])
   assert.deepEqual(getNightDenoisePassStrengths(1), [1, 1])
+})
+
+test('night denoise detail recovery sharpens real edges without restoring flat-area chroma grain', () => {
+  const width = 160
+  const height = 112
+  const source = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const offset = (y * width + x) * 4
+      const base = x < 80 ? 54 : 112
+      const texture = x >= 92 ? Math.round(7 * Math.sin(x * 0.72) * Math.sin(y * 0.45)) : 0
+      const lumaNoise = ((x * 19 + y * 23) % 15) - 7
+      const chromaNoise = ((x * 31 + y * 11) % 13) - 6
+      source[offset] = base + texture + lumaNoise + chromaNoise
+      source[offset + 1] = base + texture + lumaNoise
+      source[offset + 2] = base + texture + lumaNoise - chromaNoise
+      source[offset + 3] = [0, 96, 192, 255][(x + y) % 4]
+    }
+  }
+
+  const firstPass = applyNightDenoiseFilter(
+    { data: source, width, height },
+    { strength: 0.75, lumaStrengthScale: 0.72 },
+  )
+  const chromaPass = applyNightDenoiseFilter(firstPass, {
+    strength: 0.6428571428571429,
+    lumaStrengthScale: 0,
+    chromaStrengthScale: 0.82,
+  })
+  const recovered = recoverNightDenoiseDetails(chromaPass, {
+    sourceImageData: { data: source, width, height },
+    strength: 0.75,
+    amount: 0.56,
+  })
+
+  const lumaAt = (data, x, y) => {
+    const offset = (y * width + x) * 4
+    return data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114
+  }
+  const edgeEnergy = data => {
+    let total = 0
+    let count = 0
+    for (let y = 8; y < height - 8; y++) {
+      for (let x = 76; x < width - 8; x++) {
+        total += Math.abs(lumaAt(data, x + 1, y) - lumaAt(data, x - 1, y))
+        count++
+      }
+    }
+    return total / count
+  }
+  const flatChromaResidual = data => {
+    let total = 0
+    let count = 0
+    for (let y = 8; y < height - 8; y++) {
+      for (let x = 8; x < 68; x++) {
+        const offset = (y * width + x) * 4
+        const right = offset + 4
+        const luma = lumaAt(data, x, y)
+        const rightLuma = lumaAt(data, x + 1, y)
+        total += Math.abs((data[offset] - luma) - (data[right] - rightLuma))
+        total += Math.abs((data[offset + 2] - luma) - (data[right + 2] - rightLuma))
+        count += 2
+      }
+    }
+    return total / count
+  }
+  const flatLumaResidual = data => {
+    let total = 0
+    let count = 0
+    for (let y = 8; y < height - 8; y++) {
+      for (let x = 8; x < 68; x++) {
+        total += Math.abs(lumaAt(data, x, y) - lumaAt(data, x + 1, y))
+        count++
+      }
+    }
+    return total / count
+  }
+  const lumaDifferenceFromSource = (data, xStart, xEnd) => {
+    let total = 0
+    let count = 0
+    for (let y = 8; y < height - 8; y++) {
+      for (let x = xStart; x < xEnd; x++) {
+        total += Math.abs(lumaAt(source, x, y) - lumaAt(data, x, y))
+        count++
+      }
+    }
+    return total / count
+  }
+
+  const filteredEdgeEnergy = edgeEnergy(chromaPass.data)
+  const recoveredEdgeEnergy = edgeEnergy(recovered.data)
+  const filteredChroma = flatChromaResidual(chromaPass.data)
+  const recoveredChroma = flatChromaResidual(recovered.data)
+  const filteredFlatLuma = flatLumaResidual(chromaPass.data)
+  const recoveredFlatLuma = flatLumaResidual(recovered.data)
+  const filteredTextureDifference = lumaDifferenceFromSource(chromaPass.data, 92, width - 8)
+  const recoveredTextureDifference = lumaDifferenceFromSource(recovered.data, 92, width - 8)
+
+  assert.ok(recoveredEdgeEnergy > filteredEdgeEnergy * 1.015, `edge energy ${filteredEdgeEnergy} -> ${recoveredEdgeEnergy}`)
+  assert.ok(
+    recoveredTextureDifference < filteredTextureDifference,
+    `texture difference ${filteredTextureDifference} -> ${recoveredTextureDifference}`,
+  )
+  assert.ok(
+    recoveredFlatLuma <= filteredFlatLuma * 1.03,
+    `flat luma ${filteredFlatLuma} -> ${recoveredFlatLuma}`,
+  )
+  assert.ok(recoveredChroma <= filteredChroma * 1.015, `flat chroma ${filteredChroma} -> ${recoveredChroma}`)
+  for (let pixel = 0; pixel < width * height; pixel++) {
+    assert.equal(recovered.data[pixel * 4 + 3], source[pixel * 4 + 3], `alpha changed at pixel ${pixel}`)
+  }
 })
