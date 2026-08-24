@@ -11,6 +11,10 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
 const NORMALIZE_PRESETS = [
   { id: 'universal-main', platform: '通用', label: '全平台安全方主图', size: '800 x 800', w: 800, h: 800, maxBytes: mb(1), fill: 82, background: '纯白', note: '按拼多多 1MB 严格上限做通用安全版' },
+  { id: 'banner-wide-1920', platform: '通用 Banner', label: 'PC 超宽横幅', size: '1920 x 350', w: 1920, h: 350, maxBytes: null, fill: 92, background: '横幅/场景' },
+  { id: 'banner-visual-1920', platform: '通用 Banner', label: 'PC 主视觉横幅', size: '1920 x 500', w: 1920, h: 500, maxBytes: null, fill: 92, background: '横幅/场景' },
+  { id: 'banner-content-1200', platform: '通用 Banner', label: '网页内容横幅', size: '1200 x 400', w: 1200, h: 400, maxBytes: null, fill: 92, background: '横幅/场景' },
+  { id: 'banner-compact-960', platform: '通用 Banner', label: '中小屏横幅', size: '960 x 300', w: 960, h: 300, maxBytes: null, fill: 92, background: '横幅/场景' },
   { id: 'taobao-main', platform: '淘宝/天猫', label: '方主图推荐', size: '1440 x 1440', w: 1440, h: 1440, maxBytes: mb(3), fill: 82, background: '白底/实拍' },
   { id: 'taobao-vertical', platform: '淘宝/天猫', label: '3:4 竖版主图', size: '750 x 1000', w: 750, h: 1000, maxBytes: mb(3), fill: 82, background: '白底/实拍' },
   { id: 'taobao-detail', platform: '淘宝/天猫', label: '手机详情页', size: '750 x 3000', w: 750, h: 3000, maxBytes: mb(2.5), fill: 92, background: '白底/详情' },
@@ -72,7 +76,7 @@ const MONTHLY_VOLUMES = [
 const PRODUCT_IMAGE_FAQ = [
   ['商品图规范化免费吗？', '尺寸规范化、裁切、留白和格式导出都可以免费在浏览器本地处理；AI 抠图属于付费 API 测试功能，目前限制每个 IP 每天试用 1 张。'],
   ['图片会上传服务器吗？', '普通商品图规范化在浏览器本地完成，不上传图片。只有你主动使用 AI 抠图时，才会把当前图片发送到抠图服务处理。'],
-  ['适合哪些平台？', '页面内置淘宝/天猫、拼多多、抖店、京东、1688、快手小店、Amazon 等常见尺寸，可按平台选择预设后批量导出。'],
+  ['适合哪些平台？', '页面内置通用 Banner、淘宝/天猫、拼多多、抖店、京东、1688、快手小店、Amazon 等常见尺寸，可按平台选择预设后批量导出。'],
   ['白底图主体占比不准怎么办？', '浅色商品或白衣服可能会影响自动识别，可以进入调整工作区手动框选主体范围，再生成规范图。'],
 ]
 
@@ -2236,7 +2240,7 @@ export default function BackgroundTool({ navigate }) {
             </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {[
-                ['平台预设', '内置淘宝、拼多多、抖店、京东、1688、快手和 Amazon 常用尺寸。'],
+                ['平台预设', '内置通用 Banner、淘宝、拼多多、抖店、京东、1688、快手和 Amazon 常用尺寸。'],
                 ['批量规范', '可一次导入多张图片，统一输出尺寸、格式和主体占比。'],
                 ['白底调整', '浅色底商品可手动框选主体，减少留白过多或主体过小的问题。'],
                 ['导出控制', '支持 JPG、PNG、WebP，并尽量按平台体积限制压缩。'],

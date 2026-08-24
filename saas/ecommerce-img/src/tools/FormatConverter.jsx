@@ -27,7 +27,7 @@ const SIZE_PRESETS = [
 ]
 
 const TARGET_SIZE_OPTIONS = [
-  { label: '不限制', value: 0 },
+  { label: '原画质', value: 0 },
   { label: '100 KB', value: 100 },
   { label: '200 KB', value: 200 },
   { label: '500 KB', value: 500 },
