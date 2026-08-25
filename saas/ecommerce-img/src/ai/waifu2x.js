@@ -3,6 +3,7 @@ import wasmRuntimeUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 import { canUseDesktopAiService } from './runtimePolicy';
 import { StreamingPngEncoder, supportsStreamingPng } from './streamingPng';
 import { createStreamingRowResampler } from './streamingResize';
+import { assertWaifu2xTileOutput } from './waifu2xContract';
 
 const MODEL_PATH = '/models/waifu2x.onnx';
 const ENHANCE_MODEL_PATH = '/models/waifu2x-enhance.onnx';
@@ -226,6 +227,9 @@ export async function upscaleWithAIToPng(imageData, targetWidth, targetHeight, o
     if (error instanceof RangeError || /memory|allocation|out of bounds|detached|device lost/i.test(message)) {
       throw new Error('AI_TILED_MEMORY_FAILED', { cause: error })
     }
+    if (message.includes('AI_MODEL_OUTPUT_MISMATCH')) {
+      throw new Error('AI_INFERENCE_FAILED', { cause: error })
+    }
     throw error
   }
 }
@@ -302,8 +306,12 @@ async function runLocal(imageData, options = {}) {
   for (let index = 0; index < tiles.length; index++) {
     var tile = tiles[index];
     var tileResult = await runLocalTile(imageData, tile, ort, inputBuffers);
-    copyModelTile(tileResult, imageData, outputData, outputWidth, tile, opaque);
-    tileResult.dispose?.();
+    try {
+      assertWaifu2xTileOutput(tileResult, tile);
+      copyModelTile(tileResult, imageData, outputData, outputWidth, tile, opaque);
+    } finally {
+      tileResult.dispose?.();
+    }
     options.onProgress?.({ completed: index + 1, total: tiles.length });
     if ((index + 1) % yieldEvery === 0 || index === tiles.length - 1) await yieldToBrowser();
   }
@@ -414,8 +422,12 @@ async function runLocalToPng(imageData, targetWidth, targetHeight, options = {})
     const rowTiles = tiles.filter(tile => tile.coreY === coreY)
     for (const tile of rowTiles) {
       const tileResult = await runLocalTile(imageData, tile, ort, inputBuffers)
-      copyModelTileToStrip(tileResult, imageData, strip, modelWidth, tile, opaque)
-      tileResult.dispose?.()
+      try {
+        assertWaifu2xTileOutput(tileResult, tile)
+        copyModelTileToStrip(tileResult, imageData, strip, modelWidth, tile, opaque)
+      } finally {
+        tileResult.dispose?.()
+      }
       completed++
       options.onProgress?.({ completed, total: tiles.length })
       await yieldToBrowser()
