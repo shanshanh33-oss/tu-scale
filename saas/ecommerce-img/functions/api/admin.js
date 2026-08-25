@@ -33,15 +33,15 @@ const renderDashboard = () => `<!doctype html>
 <body>
   <main>
     <h1>TU Scale 运营总览</h1>
-    <p class="sub">在一个入口中查看流量、用户联系反馈和 AI 抠图需求。登录状态会在本浏览器中安全保留一段时间。</p>
+    <p class="sub">在一个入口中查看流量、用户联系反馈和历史抠图需求记录。登录状态会在本浏览器中安全保留一段时间。</p>
     <div class="tabs" role="tablist" aria-label="运营数据">
       <button type="button" role="tab" aria-selected="true" aria-controls="stats" data-panel="stats">流量统计</button>
       <button type="button" role="tab" aria-selected="false" aria-controls="contact" data-panel="contact">联系反馈</button>
-      <button type="button" role="tab" aria-selected="false" aria-controls="survey" data-panel="survey">抠图需求</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="survey" data-panel="survey">历史抠图需求</button>
     </div>
     <section id="stats" class="panel active" role="tabpanel"><iframe title="流量统计" src="/api/stats"></iframe></section>
     <section id="contact" class="panel" role="tabpanel"><iframe title="联系反馈" data-src="/api/contact-results"></iframe></section>
-    <section id="survey" class="panel" role="tabpanel"><iframe title="抠图需求" data-src="/api/survey-results"></iframe></section>
+    <section id="survey" class="panel" role="tabpanel"><iframe title="历史抠图需求" data-src="/api/survey-results"></iframe></section>
     <p class="hint">所有数据页均受相同管理口令保护，请勿分享登录设备或口令。</p>
   </main>
   <script>

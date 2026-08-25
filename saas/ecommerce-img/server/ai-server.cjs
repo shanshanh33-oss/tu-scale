@@ -54,11 +54,27 @@ function getDenoiseAvailability() {
   ]));
 }
 
+function getUpscaleAvailability() {
+  return fs.existsSync(WAIFU2X_PATH)
+    && fs.existsSync(path.join(MODEL_PATH, 'scale2.0x_model.param'))
+    && fs.existsSync(path.join(MODEL_PATH, 'scale2.0x_model.bin'));
+}
+
 function processImage(imageBase64, scale) {
   return new Promise((resolve, reject) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'w2x-'));
     const inputPath = path.join(tmpDir, 'input.png');
     const outputPath = path.join(tmpDir, 'output.png');
+    const cleanup = () => {
+      try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
+    };
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
     
     try {
       const buf = Buffer.from(imageBase64, 'base64');
@@ -75,21 +91,26 @@ function processImage(imageBase64, scale) {
       
       let stderr = '';
       proc.stderr.on('data', d => stderr += d.toString());
+      proc.on('error', fail);
       
       proc.on('close', (code) => {
+        if (settled) return;
         if (code !== 0 || !fs.existsSync(outputPath)) {
-          reject(new Error(`waifu2x failed (${code}): ${stderr.slice(0,200)}`));
+          fail(new Error(`waifu2x failed (${code}): ${stderr.slice(0,200)}`));
           return;
         }
-        const outBuf = fs.readFileSync(outputPath);
-        const resultBase64 = outBuf.toString('base64');
-        // Cleanup
-        try { fs.rmSync(tmpDir, { recursive: true }); } catch(e) {}
-        resolve(resultBase64);
+        try {
+          const outBuf = fs.readFileSync(outputPath);
+          const resultBase64 = outBuf.toString('base64');
+          settled = true;
+          cleanup();
+          resolve(resultBase64);
+        } catch (error) {
+          fail(error);
+        }
       });
     } catch(e) {
-      try { fs.rmSync(tmpDir, { recursive: true }); } catch(e2) {}
-      reject(e);
+      fail(e);
     }
   });
 }
@@ -147,9 +168,7 @@ function processDenoise(imageBase64, strength, requestedBackend, clarity) {
 
 function setCors(req, res) {
   const origin = req.headers.origin;
-  if (req.url === '/process') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  } else if (ALLOWED_ORIGINS.has(origin)) {
+  if (ALLOWED_ORIGINS.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
   }
@@ -159,9 +178,20 @@ function setCors(req, res) {
 
 const server = http.createServer(async (req, res) => {
   setCors(req, res);
+  const origin = req.headers.origin;
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'ORIGIN_NOT_ALLOWED' }));
+    return;
+  }
   
   if (req.method === 'OPTIONS') {
     const available = getDenoiseAvailability();
+    if (req.url === '/process' && !getUpscaleAvailability()) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: '本地 AI 放大模型尚未安装' }));
+      return;
+    }
     if (req.url === '/denoise' && !available.scunet && !available.drunet) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: '高质量本地降噪模型尚未安装' }));
@@ -169,6 +199,15 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      upscale: getUpscaleAvailability(),
+      denoise: getDenoiseAvailability(),
+    }));
     return;
   }
 

@@ -189,15 +189,15 @@ const renderDashboard = (payload) => {
   <main class="wrap">
     <div class="top">
       <div>
-        <h1>AI 抠图付费与批量需求看板</h1>
-        <p class="sub">统计来自商品图规范化页面的用户需求反馈，用来判断是否值得正式上线付费抠图和批量功能。</p>
+        <h1>历史 AI 抠图需求看板</h1>
+        <p class="sub">保留测试期的历史需求反馈和调用记录；白底抠图功能及调查入口已经停止。</p>
       </div>
       <a class="json-link" href="/api/survey-results-json">查看 JSON</a>
     </div>
 
     <section class="cards">
       <div class="card"><span>反馈总数</span><strong>${payload.total}</strong></div>
-      <div class="card"><span>AI 抠图调用记录</span><strong>${payload.removeBgUsageTotal}</strong></div>
+      <div class="card"><span>历史 AI 抠图调用记录</span><strong>${payload.removeBgUsageTotal}</strong></div>
       <div class="card"><span>愿意付费/买积分</span><strong>${(payload.summary.want.pay_once || 0) + (payload.summary.want.credits || 0) + (payload.summary.want.batch || 0)}</strong></div>
       <div class="card"><span>明确批量需求</span><strong>${(payload.summary.batchNeed.often || 0) + (payload.summary.batchNeed.must || 0)}</strong></div>
     </section>

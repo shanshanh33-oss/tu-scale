@@ -12,13 +12,14 @@ const FEEDBACK_TYPES = [
 const CONTACT_EMAIL = '994815006@qq.com'
 
 const CONTACT_FAQ = [
-  ['反馈会自动发送吗？', '不会。浏览器不能替你直接发邮件，可以复制反馈内容，或尝试打开本机邮件 App 后发送。'],
+  ['反馈会自动发送吗？', '在线版点击“提交反馈”后会把反馈内容和选填的联系方式保存到 TU Scale；本地版不会自动提交，可以复制内容或打开邮件 App 后发送。'],
   ['需要留下联系方式吗？', '不强制。普通建议可以不填；如果希望我回复或讨论合作，再留下邮箱、微信或其他联系方式。'],
   ['可以提哪些需求？', '可以提图片压缩、批量尺寸、裁切比例、抠图换背景、更多格式支持、处理失败等问题。'],
   ['商务或批量处理怎么联系？', '选择“商务合作”，写清楚图片数量、平台要求、交付格式和时间，我会按需求判断是否适合做定制。'],
 ]
 
 export default function ContactPage({ navigate }) {
+  const isLocalPage = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)
   const [type, setType] = useState('feature')
   const [message, setMessage] = useState('')
   const [contact, setContact] = useState('')
@@ -57,6 +58,11 @@ export default function ContactPage({ navigate }) {
   const submitFeedback = async () => {
     if (message.trim().length < 3) {
       setSubmitNotice('请先写一点反馈内容。')
+      return
+    }
+
+    if (isLocalPage) {
+      setSubmitNotice('本地版不会把反馈发送到服务器，请复制反馈内容或打开邮件 App。')
       return
     }
 
@@ -151,7 +157,7 @@ export default function ContactPage({ navigate }) {
                 <button onClick={submitFeedback} disabled={submitting}
                   className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60">
                   {submitting ? <Send className="w-4 h-4 animate-pulse" /> : <Send className="w-4 h-4" />}
-                  {submitting ? '提交中' : '提交反馈'}
+                  {submitting ? '提交中' : isLocalPage ? '本地版不自动提交' : '提交反馈'}
                 </button>
                 <button onClick={copyFeedback}
                   className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-semibold">
@@ -165,7 +171,9 @@ export default function ContactPage({ navigate }) {
               </div>
               {submitNotice && <p className="text-xs leading-6 text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">{submitNotice}</p>}
               {mailNotice && <p className="text-xs leading-6 text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">{mailNotice}</p>}
-              <p className="text-xs leading-6 text-gray-500">提交内容会用于改进功能和判断付费需求；也可以复制内容后手动发邮件。</p>
+              <p className="text-xs leading-6 text-gray-500">{isLocalPage
+                ? '本地版不会上传反馈内容；你可以复制内容后手动发邮件。'
+                : '在线提交会保存反馈内容和选填的联系方式，用于改进功能和判断合作需求；也可以复制内容后手动发邮件。'}</p>
             </div>
 
             <aside className="border border-gray-200 rounded-xl bg-gray-50 p-4 space-y-3">

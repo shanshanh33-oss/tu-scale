@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy } from 'lucide-react'
-import JSZip from 'jszip'
 import { canStreamAiPngExport, loadModel, processWithAI, upscaleWithAIToPng, isModelLoaded, getModelStatus } from './ai/waifu2x'
 import { BROWSER_AI_INPUT_LIMITS, BROWSER_AI_OUTPUT_LIMITS, canUseDesktopAiService, getAiBackendLabel, getAiModelInputDimensions, getAiOutputMode, getAiRuntimeErrorMessage } from './ai/runtimePolicy'
 import FormatConverter from './tools/FormatConverter'
@@ -8,8 +7,10 @@ import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
 import BackgroundTool from './tools/BackgroundTool'
 import MoireMaskEditor from './tools/MoireMaskEditor'
+import { runSequentialBatch } from './tools/batchQueue'
 import { trackEvent } from './tools/shared'
 import { decodeInputImage, getInputDecodeErrorMessage, isHeicFile } from './tools/heic'
+import { createImageZipBlob } from './tools/imageZip'
 
 const QUALITY_PRESETS = [
   { edge: 1080, label: '1080级', desc: '最长边 1080px' },
@@ -170,12 +171,8 @@ const PAGE_META = {
     description: 'TU Scale 免费图片压缩工具，支持批量压缩、目标 KB、尺寸预设、自定义裁切和证件照参考线。图片本地处理，不上传服务器。',
   },
   '/product-image': {
-    title: '商品图规范化与白底图测试 - TU Scale',
-    description: 'TU Scale 商品图规范化测试工具，支持白底图、平台尺寸、留白和高质量 API 抠图意愿测试。',
-  },
-  '/vectorizer': {
-    title: '免费图片转 SVG 工具 - Logo/线稿/插画本地矢量化 | TU Scale',
-    description: 'TU Scale 免费图片转 SVG 工具，支持黑白线稿和彩色简化模式。图片在浏览器本地矢量化，不上传服务器。',
+    title: '商品图规范化工具 - TU Scale',
+    description: 'TU Scale 商品图规范化工具，支持白底图、平台尺寸、主体占比、留白和批量导出。',
   },
   '/contact': {
     title: '反馈与联系 - TU Scale 本地图片工具箱',
@@ -506,18 +503,6 @@ const zipDownloadLockRef = useRef(false)
     }
   }, [cropPreset, compareSource])
 
-  // --- 单图拖拽 ---
-  const handleDrop = useCallback((e) => {
-    e.preventDefault()
-    setDragOver(false)
-    if (batchMode) {
-      addFilesWithLimit(e.dataTransfer.files)
-      return
-   }
-   const f = e.dataTransfer.files[0]
-    if (f) { const fext = '.' + f.name.split('.').pop().toLowerCase(); if (IMAGE_EXTS.includes(fext)) handleFile(f) }
- }, [handleFile, batchMode])
-
     const handleRemove = useCallback((e) => {
       e.stopPropagation()
       inputDecodeIdRef.current += 1
@@ -579,6 +564,21 @@ const zipDownloadLockRef = useRef(false)
       return [...prev, ...newItems]
     })
   }, [])
+
+  // --- 单图拖拽 ---
+  const handleDrop = useCallback((e) => {
+    e.preventDefault()
+    setDragOver(false)
+    if (batchMode) {
+      addFilesWithLimit(e.dataTransfer.files)
+      return
+    }
+    const f = e.dataTransfer.files[0]
+    if (f) {
+      const fext = '.' + f.name.split('.').pop().toLowerCase()
+      if (IMAGE_EXTS.includes(fext)) handleFile(f)
+    }
+  }, [addFilesWithLimit, batchMode, handleFile])
 
   const handleFileInputChange = useCallback((e) => {
     if (batchMode) {
@@ -910,12 +910,12 @@ const zipDownloadLockRef = useRef(false)
         blockReason = `输出预计 ${formatMegapixels(outputPixels)}，浏览器端处理风险太高。请降低倍数或分辨率。`
       } else if (aiOutputMode === 'confirm') {
         warnings.push(format === 'png'
-          ? `AI 输出预计 ${formatMegapixels(outputPixels)}，将启用分块 PNG 导出；开始前仍需确认处理风险。`
-          : `AI 输出预计 ${formatMegapixels(outputPixels)}，将启用大图安全模式；${format.toUpperCase()} 仍需完整画布，开始前需要确认高内存风险。`)
+          ? `AI 输出预计 ${formatMegapixels(outputPixels)}，PNG 将使用分块导出；开始前仍需确认大图处理风险。`
+          : `AI 输出预计 ${formatMegapixels(outputPixels)}，将启用大图安全模式；${format.toUpperCase()} 仍需完整画布导出。`)
       } else if (aiOutputMode === 'safe') {
         warnings.push(format === 'png'
-          ? `AI 输出预计 ${formatMegapixels(outputPixels)}，将自动分块处理并逐行导出 PNG，避免创建完整输出画布。`
-          : `AI 输出预计 ${formatMegapixels(outputPixels)}，将自动启用大图安全模式；${format.toUpperCase()} 导出仍需完整画布。`)
+          ? `AI 输出预计 ${formatMegapixels(outputPixels)}，将自动分块处理并导出 PNG，页面仅加载轻量预览。`
+          : `AI 输出预计 ${formatMegapixels(outputPixels)}，将启用大图安全模式，但 ${format.toUpperCase()} 仍需完整画布导出。`)
       } else if (outputPixels > WARN_OUTPUT_PIXELS) {
         warnings.push(`输出预计 ${formatMegapixels(outputPixels)}，处理会更慢，也会占用更多内存。`)
       }
@@ -1324,7 +1324,7 @@ const zipDownloadLockRef = useRef(false)
           }
 
           const mimeType = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png'
-          const quality = fmt === 'png' ? undefined : 0.92
+          const quality = fmt === 'png' ? undefined : fmt === 'jpeg' ? 0.96 : 0.92
             const blob = await new Promise((resolve) => srcCanvas.toBlob(resolve, mimeType, quality))
             if (!blob) throw new Error('EXPORT_FAILED')
             const dataUrl = URL.createObjectURL(blob)
@@ -2013,14 +2013,14 @@ const zipDownloadLockRef = useRef(false)
   }, [cropEnabled, cropRect])
 
   // --- 单图处理 ---
-    const handleProcess = useCallback(async () => {
+    const handleProcess = async () => {
       if (!preview || !origDims) return
       if (processEstimate?.blockReason) {
         setError(processEstimate.blockReason)
         return
       }
       if (processEstimate?.aiOutputMode === 'confirm' && !window.confirm(
-        `AI 输出预计 ${formatMegapixels(processEstimate.outputPixels)}，将占用较多内存。\n\n系统会启用大图安全模式并跳过全尺寸锐化、抗锯齿和色边修复。仍要继续吗？`
+        `AI 输出预计 ${formatMegapixels(processEstimate.outputPixels)}，处理时间会较长。\n\n${format === 'png' ? 'PNG 将使用真正的分块导出，并只生成轻量预览。' : `${format.toUpperCase()} 仍需完整画布导出，内存风险较高。`}\n系统会跳过全尺寸锐化、抗锯齿和色边修复。仍要继续吗？`
       )) return
       setProcessing(true)
       const processingStartedAt = performance.now()
@@ -2123,12 +2123,25 @@ const zipDownloadLockRef = useRef(false)
       clearInterval(timer)
       setProcessing(false)
     }
-    }, [preview, origDims, processEstimate, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, localizedChromaMoire, hasLocalizedMoireMask, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+    }
 
   // --- 批量处理 ---
-  const handleBatchProcess = useCallback(async () => {
+  const handleBatchProcess = async () => {
     const pending = batchItems.filter(it => it.status === 'pending' && it.preview && it.origDims)
     if (pending.length === 0) return
+
+    const highRiskItem = aiUpscale && pending.find(item => {
+      const cropOptions = getCropOptions(true, item.origDims)
+      const cropRectForItem = cropOptions?.rect || null
+      const sourceDims = getSourceDimsForOutput(item.origDims, cropRectForItem || cropRect)
+      const { targetW, targetH } = calcTargetDimensions(
+        sourceDims.w, sourceDims.h, scaleMode, scale, targetDims, cropEnabled ? false : keepRatio, format
+      )
+      return getAiOutputMode(targetW * targetH) === 'confirm'
+    })
+    if (highRiskItem && !window.confirm(
+      '批量任务中包含超过 70MP 的 AI 输出。系统会启用大图安全模式，但仍可能占用较多内存。是否继续？'
+    )) return
 
     setBatchProcessing(true)
     trackEvent('batch_start', { count: pending.length, batchSize: pending.length, ai: aiUpscale, aiDetailMode, format, scale: scaleMode === 'scale' ? String(scale) : 'custom' })
@@ -2138,22 +2151,24 @@ const zipDownloadLockRef = useRef(false)
       ))
 
     batchCancelRef.current = false
-    for (const item of pending) {
-      if (batchCancelRef.current) break
+    try {
+      await runSequentialBatch({
+      items: pending,
+      shouldCancel: () => batchCancelRef.current,
+      onItemStart: item => {
         setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'processing', progress: 0, stage: '准备处理' } : it))
 
-      let p = 0
-      const processingStartedAt = performance.now()
-      const tick = () => {
-        if (p < 30) p += 5
-        else if (p < 70) p += 3
-        else if (p < 90) p += 1
-        p = Math.min(p, 91)
-        setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, progress: p } : it))
-      }
-      const timer = setInterval(tick, 200)
-
-      try {
+        let progress = 0
+        const timer = setInterval(() => {
+          if (progress < 30) progress += 5
+          else if (progress < 70) progress += 3
+          else if (progress < 90) progress += 1
+          progress = Math.min(progress, 91)
+          setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, progress } : it))
+        }, 200)
+        return { processingStartedAt: performance.now(), timer }
+      },
+      processItem: async item => {
           const cropOptions = getCropOptions(true, item.origDims)
           const cropRectForItem = cropOptions?.rect || null
           const sourceDims = getSourceDimsForOutput(item.origDims, cropRectForItem || cropRect)
@@ -2177,9 +2192,9 @@ const zipDownloadLockRef = useRef(false)
           await ensureAiModel()
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage: '放大图片' } : it))
           const updateItemStage = (stage) => setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, stage } : it))
-          const res = await processImageWithCanvas(item.preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength: denoiseStrength / 100, denoiseModel, edgeInterpolation, antiAlias, largeOutputSafeMode: aiOutputMode !== 'normal' }, format, cropOptions, updateItemStage)
-        clearInterval(timer)
-
+          return processImageWithCanvas(item.preview, targetW, targetH, { contentType, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength: faceSkinStrength / 100, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength: denoiseStrength / 100, denoiseModel, edgeInterpolation, antiAlias, largeOutputSafeMode: aiOutputMode !== 'normal' }, format, cropOptions, updateItemStage)
+      },
+      onItemSuccess: (item, res, context) => {
         const sizeKB = res.size < 1024 * 1024
           ? (res.size / 1024).toFixed(1) + ' KB'
           : (res.size / (1024 * 1024)).toFixed(1) + ' MB'
@@ -2205,18 +2220,23 @@ const zipDownloadLockRef = useRef(false)
             inputHeight: item.origDims.h,
             batchSize: pending.length,
             scale: scaleMode === 'scale' ? String(scale) : 'custom',
-            durationMs: Math.round(performance.now() - processingStartedAt),
+            durationMs: Math.round(performance.now() - context.processingStartedAt),
           })
-        } catch (err) {
-          clearInterval(timer)
+      },
+      onItemError: (item, err, context) => {
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'error', progress: 0, error: getProcessErrorMessage(err), stage: '' } : it))
-          trackEvent('batch_item_error', { ai: aiUpscale, inputWidth: item.origDims.w, inputHeight: item.origDims.h, batchSize: pending.length, errorCode: 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
-        }
+          trackEvent('batch_item_error', { ai: aiUpscale, inputWidth: item.origDims.w, inputHeight: item.origDims.h, batchSize: pending.length, errorCode: 'unknown', durationMs: context ? Math.round(performance.now() - context.processingStartedAt) : 0 })
+      },
+      onItemSettled: (item, context) => {
+        void item
+        if (context?.timer) clearInterval(context.timer)
+      },
+      })
+    } finally {
+      batchCancelRef.current = false
+      setBatchProcessing(false)
     }
-
-    batchCancelRef.current = false
-    setBatchProcessing(false)
-  }, [batchItems, scaleMode, scale, targetDims, keepRatio, format, contentType, cropEnabled, cropRect, smartSharpen, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, aiInputLimits, ensureAiModel, getProcessErrorMessage, getCropOptions, getSourceDimsForOutput])
+  }
 
   // --- 单图下载 ---
   const handleDownload = () => {
@@ -2236,7 +2256,7 @@ const zipDownloadLockRef = useRef(false)
   }
 
   // --- 渲染文件名模板 ---
-  const renderFileName = (item, index) => {
+  const renderFileName = useCallback((item, index) => {
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
     const name = item.file.name.replace(/\.[^.]+$/, '')
     const scaleStr = item.origDims ? (item.resultDims.w / item.origDims.w).toFixed(1).replace(/\.0$/, '') : '1'
@@ -2247,7 +2267,7 @@ const zipDownloadLockRef = useRef(false)
       .replace(/\{ext\}/g, ext)
       .replace(/\{scale\}/g, scaleStr)
       .replace(/\{index\}/g, index + 1)
-  }
+  }, [fileNameTemplate, format])
 
   // --- 单图下载（批量用）---
   const downloadSingleResult = (item, index) => {
@@ -2273,24 +2293,10 @@ const zipDownloadLockRef = useRef(false)
     const doneItems = batchItems.filter(it => it.status === 'done' && (it.resultBlob || it.result))
     if (doneItems.length === 0) { alert('没有可下载的图片'); return }
 
-    const zip = new JSZip()
-    const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
-
-        for (let i = 0; i < doneItems.length; i++) {
-          const item = doneItems[i]
-          const fileName = renderFileName(item, i) + '.' + ext
-          if (item.resultBlob) {
-            zip.file(fileName, item.resultBlob)
-          } else if (item.result.startsWith('data:')) {
-            const base64 = item.result.split(',')[1]
-            zip.file(fileName, base64, { base64: true })
-          } else {
-            const response = await fetch(item.result)
-            zip.file(fileName, await response.blob())
-          }
-      }
-
-    const zipBlob = await zip.generateAsync({ type: 'blob' })
+    const zipBlob = await createImageZipBlob(doneItems, {
+      format,
+      getFileName: (item, index) => renderFileName(item, index),
+    })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(zipBlob)
     a.download = `tuscale_batch_${doneItems.length}images.zip`
@@ -2314,7 +2320,7 @@ const zipDownloadLockRef = useRef(false)
       zipDownloadLockRef.current = false
       setZipDownloading(false)
     }
-  }, [batchItems, format])
+  }, [batchItems, format, renderFileName])
 
   // --- 计算活跃状态 ---
  const pendingCount = batchItems.filter(it => it.status === 'pending' && it.preview && it.origDims).length

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Upload, Download, Loader2, Sparkles, CheckCircle, AlertCircle, Brush, Eraser, RotateCcw } from 'lucide-react'
+import { Upload, Download, Loader2, Sparkles, CheckCircle, AlertCircle } from 'lucide-react'
 import JSZip from 'jszip'
 import RewardButton from './RewardButton'
 
 const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, revokeObjectUrl, trackEvent } from './shared'
+import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, trackEvent } from './shared'
 
 const mb = (value) => value * 1024 * 1024
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
@@ -33,50 +33,10 @@ const NORMALIZE_PRESETS = [
   { id: 'amazon-a-plus', platform: 'Amazon', label: 'A+ 详情图', size: '1500 x 1500', w: 1500, h: 1500, maxBytes: mb(10), fill: 92, background: '详情图' },
 ]
 
-const WHITE_BG_PRESETS = [
-  { id: 'white-universal', platform: '通用', label: '全平台白底安全图', size: '800 x 800', w: 800, h: 800, maxBytes: mb(1), fill: 82, background: '纯白', note: '适合测试和多平台通用上传' },
-  { id: 'white-taobao', platform: '淘宝/天猫', label: '白底主图/第5张', size: '1440 x 1440', w: 1440, h: 1440, maxBytes: mb(3), fill: 82, background: '纯白' },
-  { id: 'white-pdd', platform: '拼多多', label: '白底主图', size: '800 x 800', w: 800, h: 800, maxBytes: mb(1), fill: 82, background: '纯白', note: '拼多多体积限制更严，默认压到 1MB 内' },
-  { id: 'white-douyin', platform: '抖店', label: '商城搜索白底图', size: '800 x 800', w: 800, h: 800, maxBytes: mb(5), fill: 82, background: '纯白' },
-  { id: 'white-jd', platform: '京东', label: '首图白底', size: '800 x 800', w: 800, h: 800, maxBytes: mb(2), fill: 82, background: '纯白' },
-  { id: 'white-1688', platform: '1688', label: '高清白底批发图', size: '1920 x 1920', w: 1920, h: 1920, maxBytes: mb(5), fill: 84, background: '纯白' },
-  { id: 'white-kuaishou', platform: '快手小店', label: '白底主图', size: '800 x 800', w: 800, h: 800, maxBytes: mb(3), fill: 82, background: '纯白' },
-  { id: 'white-amazon', platform: 'Amazon', label: '主图纯白底', size: '2000 x 2000', w: 2000, h: 2000, maxBytes: mb(10), fill: 85, background: '纯白', note: '主图按商品占画面 85% 设计' },
-]
-
-const WILLINGNESS = [
-  { value: 'free', label: '只想免费试用' },
-  { value: 'pay_once', label: '愿意小额购买' },
-  { value: 'credits', label: '愿意购买积分包' },
-  { value: 'batch', label: '需要批量套餐' },
-  { value: 'unsure', label: '先看效果再决定' },
-]
-
-const REMOVE_BG_PRICE_PLANS = [
-  { value: 'trial_9_10', label: '¥9.9 / 10 张', note: '低门槛体验价' },
-  { value: 'basic_19_20', label: '¥19.9 / 20 张', note: '测试期推荐，不容易亏' },
-  { value: 'standard_39_50', label: '¥39.9 / 50 张', note: '适合稳定小批量' },
-  { value: 'batch_99_120', label: '¥99 / 120 张', note: '批量需求价，需足够用户量' },
-]
-
-const BATCH_NEEDS = [
-  { value: 'no', label: '不需要批量' },
-  { value: 'sometimes', label: '偶尔需要批量' },
-  { value: 'often', label: '经常批量处理' },
-  { value: 'must', label: '必须支持文件夹批量' },
-]
-
-const MONTHLY_VOLUMES = [
-  { value: '1-10', label: '1-10 张/月' },
-  { value: '11-50', label: '11-50 张/月' },
-  { value: '51-200', label: '51-200 张/月' },
-  { value: '200+', label: '200 张以上/月' },
-]
-
 const PRODUCT_IMAGE_FAQ = [
-  ['商品图规范化免费吗？', '尺寸规范化、裁切、留白和格式导出都可以免费在浏览器本地处理；AI 抠图属于付费 API 测试功能，目前限制每个 IP 每天试用 1 张。'],
-  ['图片会上传服务器吗？', '普通商品图规范化在浏览器本地完成，不上传图片。只有你主动使用 AI 抠图时，才会把当前图片发送到抠图服务处理。'],
-  ['适合哪些平台？', '页面内置通用 Banner、淘宝/天猫、拼多多、抖店、京东、1688、快手小店、Amazon 等常见尺寸，可按平台选择预设后批量导出。'],
+  ['商品图规范化免费吗？', '尺寸规范化、裁切、留白和格式导出都可以免费在浏览器本地处理。'],
+  ['图片会上传服务器吗？', '商品图规范化在浏览器本地完成，不上传图片。'],
+  ['适合哪些平台？', '页面内置通用 Banner、淘宝/天猫、拼多多、抖店、京东、1688、快手小店、Amazon 等常见尺寸，可选择预设后批量导出。'],
   ['白底图主体占比不准怎么办？', '浅色商品或白衣服可能会影响自动识别，可以进入调整工作区手动框选主体范围，再生成规范图。'],
 ]
 
@@ -486,209 +446,17 @@ const exportCompliantBlob = async (canvas, preset, formatId) => {
   return best
 }
 
-const prepareImageForCutout = async (src, preset, oversample = 1.35) => {
-  const img = await readImage(src)
-  const targetLong = Math.max(preset.w, preset.h)
-  const sourceLong = Math.max(img.width, img.height)
-  const processLong = Math.min(sourceLong, Math.max(targetLong * oversample, targetLong + 240, 1200))
-  const scale = Math.min(1, processLong / sourceLong)
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.round(img.width * scale))
-  canvas.height = Math.max(1, Math.round(img.height * scale))
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-  const blob = await canvasToBlob(canvas, 'image/jpeg', 0.95)
-  return {
-    blob,
-    dataUrl: URL.createObjectURL(blob),
-    width: canvas.width,
-    height: canvas.height,
-  }
-}
-
-const colorDistance = (data, index, color) => {
-  const dr = data[index] - color.r
-  const dg = data[index + 1] - color.g
-  const db = data[index + 2] - color.b
-  return Math.sqrt(dr * dr + dg * dg + db * db)
-}
-
-const estimateCornerBackground = (data, width, height) => {
-  const points = [
-    [0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1],
-    [Math.floor(width * 0.04), Math.floor(height * 0.04)],
-    [Math.floor(width * 0.96), Math.floor(height * 0.04)],
-    [Math.floor(width * 0.04), Math.floor(height * 0.96)],
-    [Math.floor(width * 0.96), Math.floor(height * 0.96)],
-  ]
-  const colors = points.map(([x, y]) => {
-    const i = (Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))) * 4
-    return { r: data[i], g: data[i + 1], b: data[i + 2] }
-  })
-  const avg = colors.reduce((sum, color) => ({
-    r: sum.r + color.r,
-    g: sum.g + color.g,
-    b: sum.b + color.b,
-  }), { r: 0, g: 0, b: 0 })
-  return {
-    r: avg.r / colors.length,
-    g: avg.g / colors.length,
-    b: avg.b / colors.length,
-  }
-}
-
-const isBackgroundPixel = (data, index, bg, threshold) => {
-  const dist = colorDistance(data, index, bg)
-  const bright = (data[index] + data[index + 1] + data[index + 2]) / 3
-  const sat = Math.max(data[index], data[index + 1], data[index + 2]) - Math.min(data[index], data[index + 1], data[index + 2])
-  return dist < threshold || (bright > 242 && sat < 30)
-}
-
-const localCutoutCanvas = async (src, threshold = 62) => {
-  const source = await imageToCanvas(src)
-  const ctx = source.getContext('2d', { willReadFrequently: true })
-  const imageData = ctx.getImageData(0, 0, source.width, source.height)
-  const { data, width, height } = imageData
-  const bg = estimateCornerBackground(data, width, height)
-  const visited = new Uint8Array(width * height)
-  const queue = []
-
-  for (let x = 0; x < width; x += 3) {
-    queue.push([x, 0], [x, height - 1])
-  }
-  for (let y = 0; y < height; y += 3) {
-    queue.push([0, y], [width - 1, y])
-  }
-
-  while (queue.length) {
-    const [x, y] = queue.pop()
-    if (x < 0 || y < 0 || x >= width || y >= height) continue
-    const pixel = y * width + x
-    if (visited[pixel]) continue
-    visited[pixel] = 1
-    const index = pixel * 4
-    if (!isBackgroundPixel(data, index, bg, threshold)) continue
-    data[index + 3] = 0
-    queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1])
-  }
-
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const pixel = y * width + x
-      const index = pixel * 4
-      if (data[index + 3] === 0) continue
-      let transparentNeighbors = 0
-      if (data[(pixel - 1) * 4 + 3] === 0) transparentNeighbors++
-      if (data[(pixel + 1) * 4 + 3] === 0) transparentNeighbors++
-      if (data[(pixel - width) * 4 + 3] === 0) transparentNeighbors++
-      if (data[(pixel + width) * 4 + 3] === 0) transparentNeighbors++
-      if (transparentNeighbors >= 2 && isBackgroundPixel(data, index, bg, threshold * 1.25)) data[index + 3] = 80
-    }
-  }
-
-  ctx.putImageData(imageData, 0, 0)
-  return source
-}
-
-const getAlphaBounds = (canvas) => {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  let minX = width, minY = height, maxX = -1, maxY = -1
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > 12) {
-        if (x < minX) minX = x
-        if (y < minY) minY = y
-        if (x > maxX) maxX = x
-        if (y > maxY) maxY = y
-      }
-    }
-  }
-  if (maxX < minX || maxY < minY) return { x: 0, y: 0, w: width, h: height }
-  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
-}
-
-const composeProductCanvas = async ({ cutoutSrc, preset, fillRatio = 0.78, shadow = 8 }) => {
-  const cutout = typeof cutoutSrc === 'string' ? await imageToCanvas(cutoutSrc) : cutoutSrc
-  const bounds = getAlphaBounds(cutout)
-  const canvas = document.createElement('canvas')
-  canvas.width = preset.w
-  canvas.height = preset.h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, preset.w, preset.h)
-  const targetW = preset.w * fillRatio
-  const targetH = preset.h * fillRatio
-  const scale = Math.min(targetW / bounds.w, targetH / bounds.h)
-  const dw = Math.max(1, Math.round(bounds.w * scale))
-  const dh = Math.max(1, Math.round(bounds.h * scale))
-  const dx = Math.round((preset.w - dw) / 2)
-  const dy = Math.round((preset.h - dh) / 2)
-
-  if (shadow > 0) {
-    ctx.save()
-    ctx.shadowColor = 'rgba(15, 23, 42, .18)'
-    ctx.shadowBlur = shadow
-    ctx.shadowOffsetY = Math.round(shadow * 0.45)
-    ctx.drawImage(cutout, bounds.x, bounds.y, bounds.w, bounds.h, dx, dy, dw, dh)
-    ctx.restore()
-  }
-  ctx.drawImage(cutout, bounds.x, bounds.y, bounds.w, bounds.h, dx, dy, dw, dh)
-  return { canvas, placement: { sx: bounds.x, sy: bounds.y, sw: bounds.w, sh: bounds.h, dx, dy, dw, dh } }
-}
-
-const buildAlignedSourceCanvas = async (src, preset, placement) => {
-  if (!src || !placement) return null
-  const source = typeof src === 'string' ? await imageToCanvas(src) : src
-  const canvas = document.createElement('canvas')
-  canvas.width = preset.w
-  canvas.height = preset.h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, preset.w, preset.h)
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(
-    source,
-    placement.sx,
-    placement.sy,
-    placement.sw,
-    placement.sh,
-    placement.dx,
-    placement.dy,
-    placement.dw,
-    placement.dh,
-  )
-  return canvas
-}
-
-
 export default function BackgroundTool({ navigate }) {
-  const fileRef = useRef(null)
   const batchFileRef = useRef(null)
   const batchFolderRef = useRef(null)
-  const resultCanvasRef = useRef(null)
   const containPreviewRef = useRef(null)
   const fillPreviewCanvasRef = useRef(null)
   const subjectBaseCanvasRef = useRef(null)
   const normalizeCropStageRef = useRef(null)
   const subjectStageRef = useRef(null)
-  const editStateRef = useRef({ drawing: false, snapshot: null })
-  const singleExportIdRef = useRef('')
   const batchExportRef = useRef({ signature: '', id: '' })
   const batchDownloadLockRef = useRef(false)
-  const sourceCanvasRef = useRef(null)
-  const [file, setFile] = useState(null)
   const [batchFiles, setBatchFiles] = useState([])
-  const [preview, setPreview] = useState('')
-  const [result, setResult] = useState('')
-  const [resultMode, setResultMode] = useState('empty')
-  const [resultBlob, setResultBlob] = useState(null)
-  const [resultSize, setResultSize] = useState(0)
   const [normalizePresetId, setNormalizePresetId] = useState('universal-main')
   const [normalizeFillRatio, setNormalizeFillRatio] = useState(82)
   const [, setNormalizeMode] = useState('auto')
@@ -705,40 +473,12 @@ export default function BackgroundTool({ navigate }) {
   const [justConfirmedId, setJustConfirmedId] = useState('')
   const [subjectCanvasReadyKey, setSubjectCanvasReadyKey] = useState(0)
   const [batchAnalysis, setBatchAnalysis] = useState([])
-  const [presetId, setPresetId] = useState('white-universal')
-  const [method, setMethod] = useState('removebg')
-  const [fillRatio, setFillRatio] = useState(82)
-  const [shadow, setShadow] = useState(8)
   const [outputFormat, setOutputFormat] = useState('jpeg')
-  const preprocessScale = 1.18
-  const [preparedInfo, setPreparedInfo] = useState(null)
-  const [brushMode, setBrushMode] = useState('erase')
-  const [brushSize, setBrushSize] = useState(36)
-  const [brushPoint, setBrushPoint] = useState(null)
-  const [bgStrength, setBgStrength] = useState(62)
-  const [previewZoom, setPreviewZoom] = useState(1)
-  const [cutoutUrl, setCutoutUrl] = useState('')
-  const [sourceUrl, setSourceUrl] = useState('')
-  const [, setComposeInfo] = useState(null)
   const [processing, setProcessing] = useState(false)
-  const [cutoutStatus, setCutoutStatus] = useState('')
   const [normalizeStatus, setNormalizeStatus] = useState('')
-  const [cutoutError, setCutoutError] = useState('')
   const [normalizeError, setNormalizeError] = useState('')
-  const [survey, setSurvey] = useState({
-    want: 'unsure',
-    service: 'removebg',
-    price: 'basic_19_20',
-    plan: 'basic_19_20',
-    batchNeed: 'sometimes',
-    monthlyVolume: '11-50',
-    contact: '',
-    note: '',
-  })
-  const [surveyStatus, setSurveyStatus] = useState('')
 
   const normalizePreset = useMemo(() => NORMALIZE_PRESETS.find(item => item.id === normalizePresetId) || NORMALIZE_PRESETS[0], [normalizePresetId])
-  const preset = useMemo(() => WHITE_BG_PRESETS.find(item => item.id === presetId) || WHITE_BG_PRESETS[0], [presetId])
   const analysisStats = useMemo(() => {
     const matched = batchAnalysis.filter(item => item.aspectStatus === 'match').length
     const needsCrop = batchAnalysis.filter(item => item.aspectStatus === 'crop').length
@@ -749,7 +489,10 @@ export default function BackgroundTool({ navigate }) {
     return { matched, needsCrop, fillIssue, needsBoth, whiteCount, confirmed }
   }, [batchAnalysis, cropOverrides])
   const selectedReview = batchAnalysis[selectedReviewIndex]
-  const selectedOverride = selectedReview ? cropOverrides[selectedReview.id] || {} : {}
+  const selectedOverride = useMemo(
+    () => selectedReview ? cropOverrides[selectedReview.id] || {} : {},
+    [cropOverrides, selectedReview],
+  )
   const selectedMode = selectedOverride.mode || (selectedReview?.aspectStatus === 'crop' ? 'crop' : 'auto')
   const selectedFillProblem = selectedReview ? selectedReview.fillStatus === 'low' || selectedReview.fillStatus === 'high' : false
   const showSubjectEditor = Boolean(selectedReview && (selectedReview.isWhiteBg || selectedOverride.forceWhiteBg || selectedFillProblem))
@@ -971,63 +714,11 @@ export default function BackgroundTool({ navigate }) {
     return () => { cancelled = true }
   }, [cropOverrides, globalBgColor, normalizeFillRatio, normalizePanel, normalizePreset, selectedMode, selectedReview, showSubjectEditor, subjectCanvasReadyKey])
 
-  const handlePresetChange = useCallback((nextPresetId) => {
-    const nextPreset = WHITE_BG_PRESETS.find(item => item.id === nextPresetId) || WHITE_BG_PRESETS[0]
-    setPresetId(nextPreset.id)
-    setFillRatio(nextPreset.fill)
-  }, [])
-
   const handleNormalizePresetChange = useCallback((nextPresetId) => {
     const nextPreset = NORMALIZE_PRESETS.find(item => item.id === nextPresetId) || NORMALIZE_PRESETS[0]
     setNormalizePresetId(nextPreset.id)
     setNormalizeFillRatio(nextPreset.fill)
   }, [])
-
-  useEffect(() => {
-    if (!result || result === 'canvas' || !resultCanvasRef.current) return
-    let cancelled = false
-    const img = new Image()
-    img.onload = () => {
-      if (cancelled || !resultCanvasRef.current) return
-      const canvas = resultCanvasRef.current
-      canvas.width = img.width
-      canvas.height = img.height
-      canvas.getContext('2d').drawImage(img, 0, 0)
-    }
-    img.src = result
-    return () => { cancelled = true }
-  }, [result])
-
-  const handleFile = useCallback(async (nextFile, syncBatch = true) => {
-    if (!nextFile) return
-    revokeObjectUrl(result)
-    revokeObjectUrl(cutoutUrl)
-    setResult('')
-    setResultMode('empty')
-    sourceCanvasRef.current = null
-    setCutoutUrl('')
-    setSourceUrl('')
-    setPreparedInfo(null)
-    setComposeInfo(null)
-    setBrushPoint(null)
-    setPreviewZoom(1)
-    setResultBlob(null)
-    setResultSize(0)
-    setCutoutError('')
-    setCutoutStatus('')
-    setFile(nextFile)
-    if (syncBatch) setBatchFiles([nextFile])
-    const dataUrl = await readFileAsDataUrl(nextFile)
-    setPreview(dataUrl)
-    trackEvent('image_uploaded', { tool: 'product_image', count: 1 })
-  }, [cutoutUrl, result])
-
-  const handleFiles = useCallback(async (fileList) => {
-    const files = Array.from(fileList || []).filter(item => item.type.startsWith('image/'))
-    if (!files.length) return
-    await handleFile(files[0], false)
-    if (files.length > 1) setCutoutStatus(`已选择第 1 张用于白底抠图；抠图功能当前按单张处理。`)
-  }, [handleFile])
 
   const handleNormalizeFiles = useCallback(async (fileList) => {
     const allFiles = Array.from(fileList || []).filter(item => item.type.startsWith('image/'))
@@ -1041,7 +732,7 @@ export default function BackgroundTool({ navigate }) {
     setNormalizeError('')
     setNormalizeStatus(allFiles.length > MAX_BATCH_NORMALIZE_FILES
       ? `一次最多批量处理 ${MAX_BATCH_NORMALIZE_FILES} 张，已自动取前 ${MAX_BATCH_NORMALIZE_FILES} 张；剩余图片请分批处理。`
-      : `已选择 ${files.length} 张用于商品图规范化缩放；不会调用抠图 API。`)
+      : `已选择 ${files.length} 张用于商品图规范化缩放；全部在浏览器本地处理。`)
   }, [])
 
   const handleNormalizeFolderSelect = useCallback(async () => {
@@ -1143,285 +834,6 @@ export default function BackgroundTool({ navigate }) {
     setNormalizeStatus(`已批量确认 ${batchAnalysis.length} 张图片，可以批量规范下载。`)
   }, [batchAnalysis, globalBgColor, normalizePreset])
 
-  const runApiCutout = useCallback(async (imageBlob, fileName = file?.name || 'product.jpg') => {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result)
-      reader.onerror = () => reject(new Error('FILE_READ_FAILED'))
-      reader.readAsDataURL(imageBlob)
-    })
-    const endpoint = '/api/remove-bg/removebg'
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image: String(dataUrl).split(',')[1],
-        fileName,
-        mimeType: imageBlob.type || 'image/jpeg',
-      }),
-    })
-    const contentType = response.headers.get('content-type') || ''
-    if (!response.ok) {
-      const body = contentType.includes('application/json') ? await response.json() : { error: await response.text() }
-      const error = new Error(body.message || body.error || 'REMOVEBG_FAILED')
-      error.code = body.error
-      throw error
-    }
-    return await response.blob()
-  }, [file])
-
-  const updateBrushPoint = useCallback((event) => {
-    const canvas = resultCanvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
-    setBrushPoint({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      r: brushSize * (rect.width / canvas.width),
-    })
-  }, [brushSize])
-
-  const paintToResult = useCallback(async (event) => {
-    updateBrushPoint(event)
-    const canvas = resultCanvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
-    const x = (event.clientX - rect.left) * (canvas.width / rect.width)
-    const y = (event.clientY - rect.top) * (canvas.height / rect.height)
-    const ctx = canvas.getContext('2d')
-    const r = brushSize
-    if (brushMode === 'erase') {
-      ctx.save()
-      ctx.fillStyle = '#fff'
-      ctx.beginPath()
-      ctx.arc(x, y, r, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.restore()
-    } else {
-      let source = sourceCanvasRef.current
-      if (!source && sourceUrl) {
-        source = await buildAlignedSourceCanvas(sourceUrl, { w: canvas.width, h: canvas.height }, {
-          sx: 0,
-          sy: 0,
-          sw: canvas.width,
-          sh: canvas.height,
-          dx: 0,
-          dy: 0,
-          dw: canvas.width,
-          dh: canvas.height,
-        })
-        sourceCanvasRef.current = source
-      }
-      if (!source) return
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(x, y, r, 0, Math.PI * 2)
-      ctx.clip()
-      ctx.drawImage(source, 0, 0, canvas.width, canvas.height)
-      ctx.restore()
-    }
-    setResult('canvas')
-    setResultMode('edited')
-  }, [brushMode, brushSize, sourceUrl, updateBrushPoint])
-
-  const startBrush = useCallback((event) => {
-    updateBrushPoint(event)
-    if (!resultCanvasRef.current || resultMode === 'empty' || resultMode === 'prepared') return
-    event.currentTarget?.setPointerCapture?.(event.pointerId)
-    editStateRef.current.drawing = true
-    paintToResult(event)
-  }, [paintToResult, resultMode, updateBrushPoint])
-
-  const moveBrush = useCallback((event) => {
-    updateBrushPoint(event)
-    if (!editStateRef.current.drawing) return
-    paintToResult(event)
-  }, [paintToResult, updateBrushPoint])
-
-  const stopBrush = useCallback(async (event) => {
-    if (event?.currentTarget?.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    const wasDrawing = editStateRef.current.drawing
-    editStateRef.current.drawing = false
-    const canvas = resultCanvasRef.current
-    if (!wasDrawing || !canvas) return
-    const blob = await canvasToBlob(canvas, 'image/png')
-    setResultBlob(blob)
-    setResultSize(blob.size)
-  }, [])
-
-  const recomposeFromCutout = useCallback(async () => {
-    if (!cutoutUrl) return
-    setCutoutError('')
-    try {
-      const { canvas, placement } = await composeProductCanvas({ cutoutSrc: cutoutUrl, preset, fillRatio: fillRatio / 100, shadow })
-      const { blob } = await exportCompliantBlob(canvas, preset, outputFormat)
-      sourceCanvasRef.current = await buildAlignedSourceCanvas(sourceUrl || preview, preset, placement)
-      setResult('canvas')
-      setResultMode('cutout')
-      setResultBlob(blob)
-      setResultSize(blob.size)
-      setComposeInfo(placement)
-      const resultCanvas = resultCanvasRef.current
-      if (resultCanvas) {
-        resultCanvas.width = canvas.width
-        resultCanvas.height = canvas.height
-        resultCanvas.getContext('2d').drawImage(canvas, 0, 0)
-      }
-    } catch (err) {
-      setCutoutError(err?.message || '重新生成失败')
-    }
-  }, [cutoutUrl, fillRatio, outputFormat, preset, preview, shadow, sourceUrl])
-
-  const handlePrepareForApi = useCallback(async () => {
-    if (!preview) return null
-    setProcessing(true)
-    setCutoutError('')
-    setCutoutStatus('正在按所选尺寸预处理图片...')
-    try {
-      revokeObjectUrl(preparedInfo?.dataUrl)
-      const prepared = await prepareImageForCutout(preview, preset, preprocessScale)
-      setPreparedInfo(prepared)
-      setResult('canvas')
-      setResultMode('prepared')
-      setResultBlob(prepared.blob)
-      setResultSize(prepared.blob.size)
-      requestAnimationFrame(async () => {
-        const canvas = resultCanvasRef.current
-        if (!canvas) return
-        const preparedCanvas = await imageToCanvas(prepared.dataUrl)
-        canvas.width = preparedCanvas.width
-        canvas.height = preparedCanvas.height
-        canvas.getContext('2d').drawImage(preparedCanvas, 0, 0)
-      })
-      setCutoutStatus(`已生成用于抠图的临时图：${prepared.width} x ${prepared.height}`)
-      return prepared
-    } catch (err) {
-      setCutoutError(err?.message || '预处理失败')
-      return null
-    } finally {
-      setProcessing(false)
-    }
-  }, [preparedInfo?.dataUrl, preset, preprocessScale, preview])
-
-  useEffect(() => {
-    if (!cutoutUrl || !resultBlob || resultMode === 'prepared') return undefined
-    const timer = window.setTimeout(() => {
-      recomposeFromCutout()
-    }, 60)
-    return () => window.clearTimeout(timer)
-  }, [fillRatio, shadow, presetId])
-
-  useEffect(() => {
-    if (method !== 'local-white' || !preview || resultMode === 'prepared' || resultMode === 'edited') return undefined
-    const timer = window.setTimeout(async () => {
-      try {
-        const cutoutCanvas = await localCutoutCanvas(preview, bgStrength)
-        const cutoutBlob = await canvasToBlob(cutoutCanvas, 'image/png')
-        const nextCutoutUrl = URL.createObjectURL(cutoutBlob)
-        const { canvas, placement } = await composeProductCanvas({ cutoutSrc: cutoutCanvas, preset, fillRatio: fillRatio / 100, shadow })
-        const { blob } = await exportCompliantBlob(canvas, preset, outputFormat)
-        sourceCanvasRef.current = await buildAlignedSourceCanvas(preview, preset, placement)
-        revokeObjectUrl(cutoutUrl)
-        setCutoutUrl(nextCutoutUrl)
-        setSourceUrl(preview)
-        setComposeInfo(placement)
-        setResult('canvas')
-        setResultMode('cutout')
-        setResultBlob(blob)
-        setResultSize(blob.size)
-        const resultCanvas = resultCanvasRef.current
-        if (resultCanvas) {
-          resultCanvas.width = canvas.width
-          resultCanvas.height = canvas.height
-          resultCanvas.getContext('2d').drawImage(canvas, 0, 0)
-        }
-      } catch {
-        // Keep the current preview stable while the user is dragging.
-      }
-    }, 120)
-    return () => window.clearTimeout(timer)
-  }, [bgStrength, fillRatio, method, outputFormat, preset, preview, resultMode, shadow])
-
-  const handleProcess = useCallback(async () => {
-    if (!file || !preview) return
-    setProcessing(true)
-    const processingStartedAt = performance.now()
-    trackEvent('process_start', { tool: 'product_image', method, preset: preset.id })
-    setCutoutError('')
-    setCutoutStatus(method === 'removebg' ? '正在调用 AI 抠图...' : '正在清理纯色背景并生成白底图...')
-    try {
-      let cutoutSource
-      let sourceForBrush = preview
-      if (method === 'removebg') {
-        const prepared = preparedInfo || await prepareImageForCutout(preview, preset, preprocessScale)
-        if (!preparedInfo) setPreparedInfo(prepared)
-        const cutoutBlob = await runApiCutout(prepared.blob, `${getBaseName(file.name)}_prepared.jpg`)
-        cutoutSource = URL.createObjectURL(cutoutBlob)
-        sourceForBrush = prepared.dataUrl
-      } else if (method === 'local-white') {
-        cutoutSource = await localCutoutCanvas(preview, bgStrength)
-        sourceForBrush = preview
-      }
-      const { canvas, placement } = await composeProductCanvas({ cutoutSrc: cutoutSource, preset, fillRatio: fillRatio / 100, shadow })
-      const { blob, format } = await exportCompliantBlob(canvas, preset, outputFormat)
-      const storedCutoutUrl = typeof cutoutSource === 'string' ? cutoutSource : URL.createObjectURL(await canvasToBlob(cutoutSource, 'image/png'))
-      sourceCanvasRef.current = await buildAlignedSourceCanvas(sourceForBrush, preset, placement)
-      revokeObjectUrl(cutoutUrl)
-      setCutoutUrl(storedCutoutUrl)
-      setSourceUrl(sourceForBrush)
-      setComposeInfo(placement)
-      setResult('canvas')
-      setResultMode('cutout')
-      setResultBlob(blob)
-      setResultSize(blob.size)
-      requestAnimationFrame(() => {
-        const resultCanvas = resultCanvasRef.current
-        if (resultCanvas) {
-          resultCanvas.width = canvas.width
-          resultCanvas.height = canvas.height
-          resultCanvas.getContext('2d').drawImage(canvas, 0, 0)
-        }
-      })
-      setCutoutStatus(`${method === 'removebg' ? 'AI 抠图完成' : '已生成白底规范图'}，输出 ${preset.w} x ${preset.h}，${format.label}，${formatBytes(blob.size)}${preset.maxBytes ? ` / 上限 ${formatBytes(preset.maxBytes)}` : ''}。`)
-      singleExportIdRef.current = createExportId()
-      trackEvent('process_success', { tool: 'product_image', method, preset: preset.id, outputWidth: preset.w, outputHeight: preset.h, durationMs: Math.round(performance.now() - processingStartedAt) })
-    } catch (err) {
-      const message = err?.message || '处理失败'
-      const friendly = err?.code === 'DAILY_FREE_LIMIT_REACHED' || message.includes('DAILY_FREE_LIMIT_REACHED')
-        ? '功能测试期每个 IP 每天只能免费抠 1 张图。你可以填写下面的付费/批量需求调查，帮助我们决定是否开放更多额度。'
-        : message.includes('Failed to fetch')
-        ? '后台抠图服务没有启动，请先启动 remove-bg-server。'
-        : message.includes('REMOVEBG_KEY_MISSING')
-          ? '后台还没有配置 remove.bg API Key。'
-          : message
-      setCutoutError(friendly)
-      trackEvent('process_error', { tool: 'product_image', method, errorCode: message.includes('DAILY_FREE_LIMIT_REACHED') ? 'api_limit' : message.includes('Failed to fetch') ? 'network' : 'unknown', durationMs: Math.round(performance.now() - processingStartedAt) })
-    } finally {
-      setProcessing(false)
-    }
-  }, [bgStrength, cutoutUrl, file, fillRatio, method, outputFormat, preparedInfo, preset, preprocessScale, preview, result, runApiCutout, shadow])
-
-  const handleDownload = useCallback(async () => {
-    if (!resultCanvasRef.current || !file || resultMode === 'prepared') return
-    const { blob, format } = await exportCompliantBlob(resultCanvasRef.current, preset, outputFormat)
-    setResultBlob(blob)
-    setResultSize(blob.size)
-    downloadBlob(blob, `${getBaseName(file.name)}_${preset.platform}_${preset.w}x${preset.h}.${format.ext}`)
-    const exportId = singleExportIdRef.current || createExportId()
-    singleExportIdRef.current = exportId
-    trackEvent('download_success', { tool: 'product_image', mode: 'single', format: format.id, preset: preset.id })
-    trackEvent('exported_image', {
-      tool: 'product_image',
-      mode: 'single',
-      count: 1,
-      format: format.id,
-      preset: preset.id,
-      eventId: `e_${exportId}-image`,
-    })
-  }, [file, outputFormat, preset, resultMode])
-
   const handleBatchNormalize = useCallback(async () => {
     if (!batchFiles.length || batchDownloadLockRef.current) return
     batchDownloadLockRef.current = true
@@ -1490,36 +902,6 @@ export default function BackgroundTool({ navigate }) {
     }
   }, [batchAnalysis, batchFiles, cropOverrides, globalBgColor, normalizeFillRatio, normalizePreset, outputFormat])
 
-  const submitSurvey = useCallback(async () => {
-    setSurveyStatus('提交中...')
-    try {
-      await fetch('/api/survey', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'removebg_willingness',
-          want: survey.want,
-          service: survey.service,
-          price: survey.price,
-          plan: survey.plan,
-          batchNeed: survey.batchNeed,
-          monthlyVolume: survey.monthlyVolume,
-          contact: survey.contact,
-          note: survey.note,
-          method,
-          preset: preset.id,
-        }),
-      })
-      setSurveyStatus('已记录，谢谢。')
-      trackEvent('survey_submit', { tool: 'product_image', price: survey.price })
-    } catch {
-      setSurveyStatus('暂时无法提交，但你的选择已保留在本机。')
-      localStorage.setItem('tuscale_removebg_survey', JSON.stringify({ ...survey, time: Date.now() }))
-    }
-  }, [method, preset.id, survey])
-
-  const canUseBrush = Boolean(result && resultMode !== 'empty' && resultMode !== 'prepared')
-
   return (
     <div className="min-h-screen bg-gray-50/80 text-slate-950">
       <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 sticky top-0 z-10 shadow-sm">
@@ -1551,7 +933,7 @@ export default function BackgroundTool({ navigate }) {
         </div>
 
         <div className="mt-3 flex sm:hidden flex-wrap gap-2">
-          {['白底图', '尺寸规范', '商品图留白', '抠图测试'].map(item => (
+          {['白底图', '尺寸规范', '商品图留白'].map(item => (
             <span key={item} className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-xs font-semibold text-gray-500 shadow-sm">{item}</span>
           ))}
         </div>
@@ -1560,7 +942,7 @@ export default function BackgroundTool({ navigate }) {
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-semibold tracking-tight">商品图规范化缩放</h1>
-                <p className="mt-1 text-sm text-slate-500">用于已经是白底图或不需要抠图的主图，批量统一平台像素、文件体积和主体留白。</p>
+                <p className="mt-1 text-sm text-slate-500">用于已有白底或无需更换背景的主图，批量统一平台像素、文件体积和主体留白。</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button onClick={() => batchFileRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700">
@@ -2062,174 +1444,6 @@ export default function BackgroundTool({ navigate }) {
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-semibold tracking-tight">白底抠图功能</h2>
-                <p className="mt-1 text-sm text-slate-500">用于需要去背景、换纯白底、手动修边的单张商品图。</p>
-              </div>
-              <button onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700">
-                <Upload size={18} /> 上传抠图图片
-              </button>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
-            </div>
-
-            <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm leading-6 text-amber-800">
-              <p className="font-semibold">功能测试说明</p>
-              <p>AI 抠图目前使用付费 API 进行效果测试。为避免测试期产生不可控成本，每个 IP 每天可免费试用 1 张。</p>
-              <p className="text-xs text-amber-700">“先优化抠图临时图”会先把原图缩放到略大于最终平台尺寸，减少 API 消耗并保留边缘清晰度；确认临时图没问题后再点“生成规范图”。</p>
-              <button type="button" onClick={() => document.getElementById('removebg-survey')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                className="mt-3 inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100">
-                有批量需求？申请内测
-              </button>
-            </div>
-
-            <div className="mb-5 grid min-w-0 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="min-w-0 space-y-4">
-              <div className="min-w-0 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
-                <div className="mb-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 text-sm text-slate-500"><span>原图预览</span>{file && <span className="truncate text-right">{file.name}</span>}</div>
-                {preview ? <img src={preview} className="mx-auto max-h-[520px] max-w-full rounded-md object-contain" /> : (
-                  <button onClick={() => fileRef.current?.click()} className="flex h-[280px] w-full flex-col items-center justify-center gap-3 text-slate-400">
-                    <Upload size={34} /><span>点击上传抠图图片</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="grid min-w-0 gap-4 md:grid-cols-2">
-                <label className="space-y-2 text-sm font-medium text-slate-700">白底图预设
-                  <select value={presetId} onChange={(e) => handlePresetChange(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900">
-                    {WHITE_BG_PRESETS.map(item => <option key={item.id} value={item.id}>{item.platform} · {item.label} · {item.size}</option>)}
-                  </select>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700">单张抠图方式
-                  <select value={method} onChange={(e) => setMethod(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900">
-                    <option value="removebg">AI 抠图</option>
-                    <option value="local-white">免费纯色背景清理</option>
-                  </select>
-                </label>
-              </div>
-              <div className="grid gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
-                <p>当前白底规范：{preset.platform} · {preset.label}，输出 {preset.w} x {preset.h}，建议主体约 {preset.fill}%。</p>
-                <p>AI 抠图前会自动生成一张略大于所选输出尺寸的临时图；最终下载仍按平台规范导出。</p>
-              </div>
-              </div>
-
-              <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
-                <div className="mb-2 flex items-center justify-between text-sm text-slate-500"><span>{resultMode === 'prepared' ? '抠图临时图' : '结果'}</span>{resultSize > 0 && <span>{formatBytes(resultSize)}</span>}</div>
-                {result ? (
-                  <div className="max-h-[420px] min-w-0 overflow-auto rounded-md border border-slate-100 bg-slate-50 p-3">
-                    <div className="relative mx-auto w-fit" style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center', marginBottom: `${(previewZoom - 1) * 120}px` }}>
-                      <canvas
-                        ref={resultCanvasRef}
-                        className={`block max-h-[480px] max-w-full touch-none select-none rounded-md bg-white object-contain ${canUseBrush ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
-                        onPointerDown={(event) => { event.preventDefault(); startBrush(event) }}
-                        onPointerMove={moveBrush}
-                        onPointerUp={stopBrush}
-                        onPointerCancel={stopBrush}
-                        onPointerLeave={() => { stopBrush(); setBrushPoint(null) }}
-                      />
-                      {brushPoint && (
-                        <span
-                          className={`pointer-events-none absolute rounded-full border-2 ${brushMode === 'erase' ? 'border-red-500 bg-red-500/10' : 'border-emerald-500 bg-emerald-500/10'}`}
-                          style={{ left: brushPoint.x - brushPoint.r, top: brushPoint.y - brushPoint.r, width: brushPoint.r * 2, height: brushPoint.r * 2 }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex h-[300px] items-center justify-center rounded-md bg-[linear-gradient(45deg,#f1f5f9_25%,transparent_25%),linear-gradient(-45deg,#f1f5f9_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#f1f5f9_75%),linear-gradient(-45deg,transparent_75%,#f1f5f9_75%)] bg-[length:22px_22px] bg-[position:0_0,0_11px,11px_-11px,-11px_0] text-slate-400">等待处理结果</div>
-                )}
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button disabled={!file || processing} onClick={handlePrepareForApi} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 font-medium text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-                {processing ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />} 先优化抠图临时图
-              </button>
-              <button disabled={!file || processing} onClick={handleProcess} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300">
-                {processing ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />} 生成规范图
-              </button>
-              <button disabled={!resultBlob || resultMode === 'prepared'} onClick={handleDownload} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 font-medium text-slate-700 disabled:opacity-40"><Download size={18} />下载</button>
-            </div>
-            {preparedInfo && <p className="mt-2 text-xs text-slate-500">已准备清晰抠图临时图：{preparedInfo.width} x {preparedInfo.height}</p>}
-            {(cutoutStatus || cutoutError) && (
-              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                {cutoutStatus && <p className="flex items-center gap-2 text-sm text-emerald-700"><CheckCircle size={16} />{cutoutStatus}</p>}
-                {cutoutError && <p className="flex items-center gap-2 text-sm text-red-600"><AlertCircle size={16} />{cutoutError}</p>}
-              </div>
-            )}
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="space-y-2 text-sm font-medium text-slate-700">背景识别强度：{bgStrength}
-                <input type="range" min="30" max="120" value={bgStrength} onChange={(e) => setBgStrength(Number(e.target.value))} className="w-full" />
-              </label>
-              <label className="space-y-2 text-sm font-medium text-slate-700">主体占白底比例：{fillRatio}%
-                <input type="range" min="45" max="92" value={fillRatio} onChange={(e) => setFillRatio(Number(e.target.value))} className="w-full" />
-              </label>
-              <label className="space-y-2 text-sm font-medium text-slate-700">轻阴影：{shadow}
-                <input type="range" min="0" max="28" value={shadow} onChange={(e) => setShadow(Number(e.target.value))} className="w-full" />
-              </label>
-              <label className="space-y-2 text-sm font-medium text-slate-700">局部放大：{previewZoom.toFixed(1)}x
-                <input type="range" min="1" max="4" step="0.25" value={previewZoom} onChange={(e) => setPreviewZoom(Number(e.target.value))} className="w-full" />
-              </label>
-            </div>
-
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <button type="button" disabled={!canUseBrush} onClick={() => setBrushMode('erase')} className={`inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-45 ${brushMode === 'erase' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-300 bg-white text-slate-600'}`}><Eraser size={16} />去除</button>
-                <button type="button" disabled={!canUseBrush} onClick={() => setBrushMode('keep')} className={`inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-45 ${brushMode === 'keep' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-600'}`}><Brush size={16} />保留</button>
-                <button type="button" disabled={!cutoutUrl} onClick={recomposeFromCutout} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-600 disabled:opacity-40"><RotateCcw size={16} />重置修边</button>
-              </div>
-              <label className="block text-sm font-medium text-slate-700">画笔大小：{brushSize}px
-                <input type="range" min="8" max="120" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="mt-2 w-full" />
-              </label>
-              <p className="mt-2 text-xs text-slate-500">{canUseBrush ? '去除会把涂抹区域变成白底；保留会从原图同位置补回内容。' : '请先点击“生成规范图”，得到抠图结果后再使用保留/去除画笔修边。'}</p>
-            </div>
-              </div>
-            </div>
-
-            <div id="removebg-survey" className="mt-5 scroll-mt-28 rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="mb-3">
-                <p className="text-sm font-semibold text-slate-800">AI 抠图付费与批量需求调查</p>
-                <p className="mt-1 text-xs text-slate-500">以下价格是测试期备选方案，用来判断是否值得正式上线；不会在这里直接扣费。</p>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2 text-sm font-medium text-slate-700">是否愿意付费使用
-                  <select value={survey.want} onChange={(e) => setSurvey(data => ({ ...data, want: e.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900">
-                    {WILLINGNESS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700">你能接受的积分方案
-                  <select value={survey.plan} onChange={(e) => setSurvey(data => ({ ...data, plan: e.target.value, price: e.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900">
-                    {REMOVE_BG_PRICE_PLANS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700">是否需要批量抠白底图
-                  <select value={survey.batchNeed} onChange={(e) => setSurvey(data => ({ ...data, batchNeed: e.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900">
-                    {BATCH_NEEDS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700">每月大概需要处理多少张
-                  <select value={survey.monthlyVolume} onChange={(e) => setSurvey(data => ({ ...data, monthlyVolume: e.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900">
-                    {MONTHLY_VOLUMES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="mt-4 grid gap-4 md:grid-cols-[.8fr_1.2fr]">
-                <label className="space-y-2 text-sm font-medium text-slate-700">联系方式（选填）
-                  <input value={survey.contact} onChange={(e) => setSurvey(data => ({ ...data, contact: e.target.value }))} placeholder="微信/邮箱，方便后续通知内测" className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900" />
-                </label>
-                <label className="space-y-2 text-sm font-medium text-slate-700">补充需求（选填）
-                  <input value={survey.note} onChange={(e) => setSurvey(data => ({ ...data, note: e.target.value }))} placeholder="例如：需要文件夹批量、透明 PNG、自动压缩到平台尺寸等" className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900" />
-                </label>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button type="button" onClick={submitSurvey} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-medium text-white">
-                  <CheckCircle size={17} /> 提交需求反馈
-                </button>
-                {surveyStatus && <span className="text-sm text-emerald-700">{surveyStatus}</span>}
-                <span className="text-xs text-slate-500">提交后会记录你的选择。</span>
-              </div>
-            </div>
-          </div>
         </section>
 
         <section className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
