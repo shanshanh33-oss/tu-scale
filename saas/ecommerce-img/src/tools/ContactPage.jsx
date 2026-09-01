@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { CheckCircle, Copy, HeartHandshake, Lightbulb, Mail, MessageSquare, Send, Wrench } from 'lucide-react'
 import RewardButton from './RewardButton'
+import HistoryButton from './HistoryButton'
 
 const FEEDBACK_TYPES = [
   { id: 'feature', label: '功能建议', icon: Lightbulb },
@@ -18,7 +19,7 @@ const CONTACT_FAQ = [
   ['商务或批量处理怎么联系？', '选择“商务合作”，写清楚图片数量、平台要求、交付格式和时间，我会按需求判断是否适合做定制。'],
 ]
 
-export default function ContactPage({ navigate }) {
+export default function ContactPage({ navigate, historyEnabled = false, onOpenHistory }) {
   const isLocalPage = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)
   const [type, setType] = useState('feature')
   const [message, setMessage] = useState('')
@@ -106,7 +107,7 @@ export default function ContactPage({ navigate }) {
 
   return (
     <div className="min-h-screen bg-gray-50/80">
-      <ToolHeader active="contact" navigate={navigate} />
+      <ToolHeader active="contact" navigate={navigate} historyEnabled={historyEnabled} onOpenHistory={onOpenHistory} />
       <main className="max-w-5xl mx-auto px-4 py-6 pb-20 space-y-5">
         <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -223,7 +224,7 @@ function InfoCard({ title, text }) {
   )
 }
 
-function ToolHeader({ active, navigate }) {
+function ToolHeader({ active, navigate, historyEnabled, onOpenHistory }) {
   const items = [
     { id: 'upscale', label: '图片放大', path: '/' },
     { id: 'converter', label: '图片压缩', path: '/format-converter' },
@@ -246,6 +247,7 @@ function ToolHeader({ active, navigate }) {
             </button>
           ))}
         </nav>
+        <HistoryButton enabled={historyEnabled} onOpen={onOpenHistory} />
       </div>
     </header>
   )

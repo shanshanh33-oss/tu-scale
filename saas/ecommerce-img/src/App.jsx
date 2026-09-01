@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
-import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy } from 'lucide-react'
+import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy, Clock3 } from 'lucide-react'
 import { canStreamAiPngExport, loadModel, processWithAI, upscaleWithAIToPng, isModelLoaded, getModelStatus } from './ai/waifu2x'
 import { BROWSER_AI_INPUT_LIMITS, BROWSER_AI_OUTPUT_LIMITS, canUseDesktopAiService, getAiBackendLabel, getAiModelInputDimensions, getAiOutputMode, getAiRuntimeErrorMessage } from './ai/runtimePolicy'
 import FormatConverter from './tools/FormatConverter'
@@ -7,10 +7,13 @@ import ContactPage from './tools/ContactPage'
 import RewardButton from './tools/RewardButton'
 import BackgroundTool from './tools/BackgroundTool'
 import MoireMaskEditor from './tools/MoireMaskEditor'
+import HistoryPanel from './tools/HistoryPanel'
+import HistoryButton from './tools/HistoryButton'
 import { runSequentialBatch } from './tools/batchQueue'
-import { trackEvent } from './tools/shared'
+import { getOutputFileName, trackEvent } from './tools/shared'
 import { decodeInputImage, getInputDecodeErrorMessage, isHeicFile } from './tools/heic'
 import { createImageZipBlob } from './tools/imageZip'
+import { createFileFromHistoryEntry, createHistoryThumbnail, getHistoryEntry, getHistoryPreferences, purgeExpiredHistoryEntries, saveHistoryEntry, setHistoryPreferences } from './tools/localHistory'
 
 const QUALITY_PRESETS = [
   { edge: 1080, label: '1080级', desc: '最长边 1080px' },
@@ -270,6 +273,10 @@ const PAGE_META = {
   const [, setImgZoom] = useState(1)
   const [, setImgPan] = useState({ x: 0, y: 0 })
   const [shareNotice, setShareNotice] = useState('')
+  const [showHistory, setShowHistory] = useState(false)
+  const [historyPreferences, setHistoryPreferencesState] = useState(() => getHistoryPreferences())
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0)
+  const [historyNotice, setHistoryNotice] = useState('')
     // --- 预加载 AI 模型 ---
     useEffect(() => {
       if (!aiUpscale) {
@@ -323,6 +330,7 @@ const PAGE_META = {
   const [zipDownloading, setZipDownloading] = useState(false)
   const [batchToast, setBatchToast] = useState('')
   const [fileNameTemplate, setFileNameTemplate] = useState('{name}_{w}x{h}')
+  const [preserveOriginalFileName, setPreserveOriginalFileName] = useState(false)
   const [dragOverIdx, setDragOverIdx] = useState(null)
 
   const fileRef = useRef(null)
@@ -378,6 +386,12 @@ const zipDownloadLockRef = useRef(false)
       trackEvent('session_start', { path: route })
     }
   }, [route])
+
+  useEffect(() => {
+    void purgeExpiredHistoryEntries()
+      .then(() => setHistoryRefreshToken(token => token + 1))
+      .catch(() => {})
+  }, [])
 
  // --- 键盘快捷键 ---
  useEffect(() => {
@@ -436,6 +450,7 @@ const zipDownloadLockRef = useRef(false)
         if (s.customW) setCustomW(s.customW)
         if (s.customH) setCustomH(s.customH)
         if (s.fileNameTemplate) setFileNameTemplate(s.fileNameTemplate)
+        if (s.preserveOriginalFileName !== undefined) setPreserveOriginalFileName(Boolean(s.preserveOriginalFileName))
       }
     } catch {
       // Ignore malformed saved settings and continue with defaults.
@@ -446,9 +461,9 @@ const zipDownloadLockRef = useRef(false)
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx,
-      keepRatio, customW, customH, fileNameTemplate
+      keepRatio, customW, customH, fileNameTemplate, preserveOriginalFileName
     }))
-  }, [scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate])
+  }, [scale, format, contentType, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, clahe, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, scaleMode, targetMode, targetIdx, keepRatio, customW, customH, fileNameTemplate, preserveOriginalFileName])
 
   // --- 单图模式 effect ---
   useEffect(() => {
@@ -663,6 +678,58 @@ const zipDownloadLockRef = useRef(false)
     setProcessStage('')
     setError(null)
   }, [batchMode, clearAllBatch, compareSource])
+
+  const applyHistorySettings = useCallback((settings = {}) => {
+    if (settings.scaleMode === 'scale' || settings.scaleMode === 'target') setScaleMode(settings.scaleMode)
+    if (Number.isFinite(settings.scale)) setScale(clamp(settings.scale, 1, 8))
+    if (settings.targetMode === 'preset' || settings.targetMode === 'custom') setTargetMode(settings.targetMode)
+    if (Number.isInteger(settings.targetIdx)) setTargetIdx(clamp(settings.targetIdx, 0, QUALITY_PRESETS.length - 1))
+    if (Number.isFinite(settings.customW)) setCustomW(clamp(Math.round(settings.customW), 1, 10000))
+    if (Number.isFinite(settings.customH)) setCustomH(clamp(Math.round(settings.customH), 1, 10000))
+    if (['png', 'jpeg', 'webp'].includes(settings.format)) setFormat(settings.format)
+    if (settings.contentType === 'photo' || settings.contentType === 'text') setContentType(settings.contentType)
+    if (typeof settings.keepRatio === 'boolean') setKeepRatio(settings.keepRatio)
+    if (typeof settings.smartSharpen === 'boolean') setSmartSharpen(settings.smartSharpen)
+    if (Number.isFinite(settings.sharpenAmount)) setSharpenAmount(clamp(settings.sharpenAmount, 0, 3))
+    if (typeof settings.aiUpscale === 'boolean') setAiUpscale(settings.aiUpscale)
+    if (settings.aiDetailMode === 'strong' || settings.aiDetailMode === 'preserve') setAiDetailMode(settings.aiDetailMode)
+    if (typeof settings.reduceArtifacts === 'boolean') setReduceArtifacts(settings.reduceArtifacts)
+    if (typeof settings.repairColorFringes === 'boolean') setRepairColorFringes(settings.repairColorFringes)
+    if (['light', 'standard', 'strong'].includes(settings.colorFringeStrength)) setColorFringeStrength(settings.colorFringeStrength)
+    if (typeof settings.faceAwareProtection === 'boolean') setFaceAwareProtection(settings.faceAwareProtection)
+    if (Number.isFinite(settings.faceSkinStrength)) setFaceSkinStrength(clamp(settings.faceSkinStrength, 0, 100))
+    if (typeof settings.deblur === 'boolean') setDeblur(settings.deblur)
+    if (typeof settings.autoLevels === 'boolean') setAutoLevels(settings.autoLevels)
+    if (typeof settings.vibrance === 'boolean') setVibrance(settings.vibrance)
+    if (typeof settings.smartDenoise === 'boolean') setSmartDenoise(settings.smartDenoise)
+    if (Number.isFinite(settings.denoiseStrength)) setDenoiseStrength(clamp(settings.denoiseStrength, 35, 100))
+    if (settings.denoiseModel === 'scunet' || settings.denoiseModel === 'drunet') setDenoiseModel(settings.denoiseModel)
+    if (typeof settings.edgeInterpolation === 'boolean') setEdgeInterpolation(settings.edgeInterpolation)
+    if (typeof settings.antiAlias === 'boolean') setAntiAlias(settings.antiAlias)
+    if (typeof settings.cropEnabled === 'boolean') setCropEnabled(settings.cropEnabled)
+    if (typeof settings.preserveOriginalFileName === 'boolean') setPreserveOriginalFileName(settings.preserveOriginalFileName)
+    if (CROP_PRESETS.some(item => item.id === settings.cropPreset)) setCropPreset(settings.cropPreset)
+    if (settings.cropRect && ['x', 'y', 'w', 'h'].every(key => Number.isFinite(settings.cropRect[key]))) {
+      setCropRect(normalizeCropRect(settings.cropRect))
+    }
+    localizedMoireMaskCanvasRef.current = null
+    setLocalizedChromaMoire(false)
+    setHasLocalizedMoireMask(false)
+  }, [])
+
+  const restoreHistoryEntry = useCallback(async (id) => {
+    const entry = await getHistoryEntry(id)
+    if (!entry) throw new Error('HISTORY_SOURCE_MISSING')
+    const sourceFile = createFileFromHistoryEntry(entry)
+    if (batchMode) setToolMode(false)
+    if (route !== '/') navigate('/')
+    await handleFile(sourceFile)
+    applyHistorySettings(entry.settings)
+    setShowHistory(false)
+    setHistoryNotice('已载入原图和上次参数，请确认后重新处理')
+    window.setTimeout(() => setHistoryNotice(''), 3500)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [applyHistorySettings, batchMode, handleFile, navigate, route, setToolMode])
 
   const updateCropFromPointer = useCallback((event) => {
     if (!cropDrag || !cropStageRef.current) return
@@ -2012,6 +2079,111 @@ const zipDownloadLockRef = useRef(false)
     }
   }, [cropEnabled, cropRect])
 
+  const getHistorySettingsSnapshot = useCallback(() => ({
+    scaleMode,
+    scale,
+    targetMode,
+    targetIdx,
+    customW,
+    customH,
+    format,
+    contentType,
+    keepRatio,
+    smartSharpen,
+    sharpenAmount,
+    aiUpscale,
+    aiDetailMode,
+    reduceArtifacts,
+    repairColorFringes,
+    colorFringeStrength,
+    faceAwareProtection,
+    faceSkinStrength,
+    deblur,
+    autoLevels,
+    vibrance,
+    smartDenoise,
+    denoiseStrength,
+    denoiseModel,
+    edgeInterpolation,
+    antiAlias,
+    cropEnabled,
+    cropPreset,
+    cropRect,
+    preserveOriginalFileName,
+  }), [scaleMode, scale, targetMode, targetIdx, customW, customH, format, contentType, keepRatio, smartSharpen, sharpenAmount, aiUpscale, aiDetailMode, reduceArtifacts, repairColorFringes, colorFringeStrength, faceAwareProtection, faceSkinStrength, deblur, autoLevels, vibrance, smartDenoise, denoiseStrength, denoiseModel, edgeInterpolation, antiAlias, cropEnabled, cropPreset, cropRect, preserveOriginalFileName])
+
+  const saveHistoryCandidate = useCallback(async ({
+    sourceFile,
+    sourcePreview,
+    sourceDims,
+    outputDims,
+    mode,
+    sourceCropRect = null,
+  }, retentionDaysOverride = null) => {
+    const retentionDays = retentionDaysOverride
+      || (historyPreferences.enabled ? historyPreferences.retentionDays : null)
+    if (!retentionDays || !sourceFile || !sourcePreview) return
+    try {
+      let thumbnailBlob = null
+      try {
+        thumbnailBlob = await createHistoryThumbnail(sourcePreview)
+      } catch {
+        try {
+          thumbnailBlob = await createHistoryThumbnail(sourceFile)
+        } catch {
+          // The original image and settings remain useful without a thumbnail.
+        }
+      }
+      await saveHistoryEntry({
+        file: sourceFile,
+        thumbnailBlob,
+        settings: {
+          ...getHistorySettingsSnapshot(),
+          ...(sourceCropRect ? { cropRect: sourceCropRect } : {}),
+        },
+        sourceDims,
+        outputDims,
+        retentionDays,
+        mode,
+      })
+      setHistoryRefreshToken(value => value + 1)
+    } catch {
+      setHistoryNotice('未能保存本地历史，请检查浏览器存储空间或权限')
+      window.setTimeout(() => setHistoryNotice(''), 4000)
+    }
+  }, [getHistorySettingsSnapshot, historyPreferences])
+
+  const handleHistoryPreferencesChange = useCallback(async (nextPreferences) => {
+    const wasEnabled = historyPreferences.enabled
+    const normalized = setHistoryPreferences(nextPreferences)
+    setHistoryPreferencesState(normalized)
+    if (!wasEnabled && normalized.enabled) {
+      if (!batchMode && file && preview && resultDims) {
+        await saveHistoryCandidate({
+          sourceFile: file,
+          sourcePreview: preview,
+          sourceDims: origDims,
+          outputDims: resultDims,
+          mode: 'single',
+        }, normalized.retentionDays)
+      } else if (batchMode) {
+        const completedItems = batchItems.filter(item => item.status === 'done' && item.file && item.preview)
+        for (const item of completedItems) {
+          await saveHistoryCandidate({
+            sourceFile: item.file,
+            sourcePreview: item.preview,
+            sourceDims: item.origDims,
+            outputDims: item.resultDims,
+            mode: 'batch',
+            sourceCropRect: cropEnabled && item.origDims
+              ? getDefaultCropRect(item.origDims.w, item.origDims.h, cropPreset)
+              : null,
+          }, normalized.retentionDays)
+        }
+      }
+    }
+  }, [batchItems, batchMode, cropEnabled, cropPreset, file, historyPreferences.enabled, origDims, preview, resultDims, saveHistoryCandidate])
+
   // --- 单图处理 ---
     const handleProcess = async () => {
       if (!preview || !origDims) return
@@ -2113,6 +2285,13 @@ const zipDownloadLockRef = useRef(false)
           inputHeight: origDims.h,
           scale: scaleMode === 'scale' ? String(scale) : 'custom',
           durationMs: Math.round(performance.now() - processingStartedAt),
+        })
+        void saveHistoryCandidate({
+          sourceFile: file,
+          sourcePreview: preview,
+          sourceDims: origDims,
+          outputDims: { w: res.width, h: res.height },
+          mode: 'single',
         })
       } catch (err) {
         setError(getProcessErrorMessage(err))
@@ -2222,6 +2401,16 @@ const zipDownloadLockRef = useRef(false)
             scale: scaleMode === 'scale' ? String(scale) : 'custom',
             durationMs: Math.round(performance.now() - context.processingStartedAt),
           })
+          void saveHistoryCandidate({
+            sourceFile: item.file,
+            sourcePreview: item.preview,
+            sourceDims: item.origDims,
+            outputDims: { w: res.width, h: res.height },
+            mode: 'batch',
+            sourceCropRect: cropEnabled && item.origDims
+              ? getDefaultCropRect(item.origDims.w, item.origDims.h, cropPreset)
+              : null,
+          })
       },
       onItemError: (item, err, context) => {
           setBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, status: 'error', progress: 0, error: getProcessErrorMessage(err), stage: '' } : it))
@@ -2243,8 +2432,10 @@ const zipDownloadLockRef = useRef(false)
     if (!result && !resultBlob) return
     const a = document.createElement('a')
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
-    const name = file ? file.name.replace(/\.[^.]+$/, '') : 'image'
-    a.download = `${name}_${resultDims ? resultDims.w + 'x' + resultDims.h : 'result'}.${ext}`
+    a.download = getOutputFileName(file?.name, ext, {
+      preserveOriginalName: preserveOriginalFileName,
+      suffix: `_${resultDims ? resultDims.w + 'x' + resultDims.h : 'result'}`,
+    })
     const downloadUrl = resultBlob ? URL.createObjectURL(resultBlob) : result
     a.href = downloadUrl
     a.click()
@@ -2260,6 +2451,7 @@ const zipDownloadLockRef = useRef(false)
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
     const name = item.file.name.replace(/\.[^.]+$/, '')
     const scaleStr = item.origDims ? (item.resultDims.w / item.origDims.w).toFixed(1).replace(/\.0$/, '') : '1'
+    if (preserveOriginalFileName) return name
     return fileNameTemplate
       .replace(/\{name\}/g, name)
       .replace(/\{w\}/g, item.resultDims.w)
@@ -2267,14 +2459,16 @@ const zipDownloadLockRef = useRef(false)
       .replace(/\{ext\}/g, ext)
       .replace(/\{scale\}/g, scaleStr)
       .replace(/\{index\}/g, index + 1)
-  }, [fileNameTemplate, format])
+  }, [fileNameTemplate, format, preserveOriginalFileName])
 
   // --- 单图下载（批量用）---
   const downloadSingleResult = (item, index) => {
     if (!item.result && !item.resultBlob) return
     const a = document.createElement('a')
     const ext = format === "jpeg" ? "jpg" : format === "webp" ? "webp" : "png"
-    a.download = renderFileName(item, index || 0) + '.' + ext
+    a.download = preserveOriginalFileName
+      ? getOutputFileName(item.file.name, ext, { preserveOriginalName: true })
+      : `${renderFileName(item, index || 0)}.${ext}`
     const downloadUrl = item.resultBlob ? URL.createObjectURL(item.resultBlob) : item.result
     a.href = downloadUrl
     a.click()
@@ -2343,9 +2537,38 @@ const zipDownloadLockRef = useRef(false)
     setTimeout(() => setShareNotice(''), 2200)
   }, [])
 
-  if (route === '/format-converter') return <FormatConverter navigate={navigate} />
-  if (route === '/product-image') return <BackgroundTool navigate={navigate} />
-  if (route === '/contact') return <ContactPage navigate={navigate} />
+  const historyOverlay = (
+    <>
+      {historyNotice && (
+        <div role="status" className="fixed left-1/2 top-24 z-40 -translate-x-1/2 rounded-xl border border-indigo-200 bg-white px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-lg">
+          {historyNotice}
+        </div>
+      )}
+      <HistoryPanel
+        open={showHistory}
+        preferences={historyPreferences}
+        refreshToken={historyRefreshToken}
+        onClose={() => setShowHistory(false)}
+        onPreferencesChange={handleHistoryPreferencesChange}
+        onRestore={restoreHistoryEntry}
+      />
+    </>
+  )
+
+  if (route === '/format-converter') return <>
+    <FormatConverter navigate={navigate} preserveOriginalFileName={preserveOriginalFileName} setPreserveOriginalFileName={setPreserveOriginalFileName}
+      historyEnabled={historyPreferences.enabled} onOpenHistory={() => setShowHistory(true)} />
+    {historyOverlay}
+  </>
+  if (route === '/product-image') return <>
+    <BackgroundTool navigate={navigate} preserveOriginalFileName={preserveOriginalFileName} setPreserveOriginalFileName={setPreserveOriginalFileName}
+      historyEnabled={historyPreferences.enabled} onOpenHistory={() => setShowHistory(true)} />
+    {historyOverlay}
+  </>
+  if (route === '/contact') return <>
+    <ContactPage navigate={navigate} historyEnabled={historyPreferences.enabled} onOpenHistory={() => setShowHistory(true)} />
+    {historyOverlay}
+  </>
 
  return (
     <div className="min-h-screen bg-gray-50/80">
@@ -2364,10 +2587,17 @@ const zipDownloadLockRef = useRef(false)
               </button>
             ))}
           </nav>
+          <HistoryButton enabled={historyPreferences.enabled} onOpen={() => setShowHistory(true)} />
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6 pb-24 space-y-6">
+
+        {historyNotice && (
+          <div role="status" className="fixed left-1/2 top-24 z-40 -translate-x-1/2 rounded-xl border border-indigo-200 bg-white px-4 py-2.5 text-sm font-medium text-indigo-700 shadow-lg">
+            {historyNotice}
+          </div>
+        )}
 
         <div className="flex md:hidden items-center gap-1 overflow-x-auto">
           {TOOL_NAV.map(item => (
@@ -2836,6 +3066,12 @@ const zipDownloadLockRef = useRef(false)
               </div>
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                  <input type="checkbox" checked={preserveOriginalFileName}
+                    onChange={(e) => setPreserveOriginalFileName(e.target.checked)}
+                    className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
+                  保留原文件名
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                   <input type="checkbox" checked={keepRatio && !cropEnabled} disabled={cropEnabled}
                     onChange={(e) => setKeepRatio(e.target.checked)}
                     className="w-3 h-3 rounded border-gray-300 text-indigo-500" />
@@ -3250,9 +3486,24 @@ const zipDownloadLockRef = useRef(false)
               <Download className="w-4 h-4" /> 下载 {format === 'jpeg' ? 'JPG' : format.toUpperCase()}
             </button>
             <p className="text-center text-xs text-gray-500">
-              文件名：{file ? file.name.replace(/\.[^.]+$/, '') : 'image'}_{resultDims.w}x{resultDims.h}.{format === 'jpeg' ? 'jpg' : format}
+              文件名：{getOutputFileName(file?.name, format === 'jpeg' ? 'jpg' : format, {
+                preserveOriginalName: preserveOriginalFileName,
+                suffix: `_${resultDims.w}x${resultDims.h}`,
+              })}
               {format === 'png' ? ' · 保留透明背景' : ' · 不保留透明背景'}
             </p>
+            {!historyPreferences.enabled && (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3 sm:flex sm:items-center sm:justify-between sm:gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">需要以后从原图重新生成吗？</p>
+                  <p className="mt-1 text-xs leading-5 text-indigo-700">可选择在当前浏览器保存 7 天或 30 天，不上传服务器。</p>
+                </div>
+                <button type="button" onClick={() => setShowHistory(true)}
+                  className="mt-3 inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 sm:mt-0">
+                  <Clock3 className="h-3.5 w-3.5" /> 设置本地历史
+                </button>
+              </div>
+            )}
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-start gap-2">
                 <CheckCircle className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />
@@ -3308,6 +3559,18 @@ const zipDownloadLockRef = useRef(false)
                 </div>
               ))}
             </div>
+            {!historyPreferences.enabled && (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3 sm:flex sm:items-center sm:justify-between sm:gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-indigo-900">以后还想用同一批原图重新生成？</p>
+                  <p className="mt-1 text-xs leading-5 text-indigo-700">开启后只保存在当前浏览器，可选择保存 7 天或 30 天。</p>
+                </div>
+                <button type="button" onClick={() => setShowHistory(true)}
+                  className="mt-3 inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 sm:mt-0">
+                  <Clock3 className="h-3.5 w-3.5" /> 设置本地历史
+                </button>
+              </div>
+            )}
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-start gap-2">
                 <CheckCircle className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />
@@ -3428,6 +3691,15 @@ const zipDownloadLockRef = useRef(false)
       <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">TU Scale&middot;{'\u56fe\u7247\u653e\u5927\u5de5\u5177'} &middot; 浏览器本地处理</footer>
 
       <RewardButton />
+
+      <HistoryPanel
+        open={showHistory}
+        preferences={historyPreferences}
+        refreshToken={historyRefreshToken}
+        onClose={() => setShowHistory(false)}
+        onPreferencesChange={handleHistoryPreferencesChange}
+        onRestore={restoreHistoryEntry}
+      />
 
       {/* 全屏查看 - 单图模式 */}
       {showModal && modalMode === 'single' && result && (

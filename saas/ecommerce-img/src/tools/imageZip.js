@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import { reserveUniqueFileName } from './shared.js'
 
 export const getImageExtension = format => (
   format === 'jpeg' ? 'jpg' : format === 'webp' ? 'webp' : 'png'
@@ -18,10 +19,11 @@ export const createImageZipBlob = async (items, {
 
   const zip = new JSZip()
   const extension = getImageExtension(format)
+  const usedFileNames = new Set()
 
   for (let index = 0; index < items.length; index++) {
     const item = items[index]
-    const fileName = `${getFileName(item, index)}.${extension}`
+    const fileName = reserveUniqueFileName(`${getFileName(item, index)}.${extension}`, usedFileNames)
     if (item.resultBlob) {
       zip.file(fileName, await item.resultBlob.arrayBuffer())
     } else if (typeof item.result === 'string' && item.result.startsWith('data:')) {

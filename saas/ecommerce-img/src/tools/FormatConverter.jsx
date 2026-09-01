@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle, Copy, Download, FileDown, FolderOpen, Image as ImageIcon, Loader2, Move, RefreshCw, SlidersHorizontal, Upload, X } from 'lucide-react'
 import JSZip from 'jszip'
-import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readImage, revokeObjectUrl, trackEvent } from './shared'
+import { canvasToBlob, downloadBlob, formatBytes, getOutputFileName, readImage, reserveUniqueFileName, revokeObjectUrl, trackEvent } from './shared'
 import { decodeInputImage, getInputDecodeErrorMessage } from './heic'
 import RewardButton from './RewardButton'
+import HistoryButton from './HistoryButton'
 
 const OUTPUTS = [
   { id: 'jpeg', label: 'JPG', mime: 'image/jpeg', ext: 'jpg', quality: true, note: '照片、报名照和证件照常用，体积小，不保留透明背景。' },
@@ -88,7 +89,7 @@ const normalizeCropRect = (rect, ratio = null) => {
   return next
 }
 
-export default function FormatConverter({ navigate }) {
+export default function FormatConverter({ navigate, preserveOriginalFileName = false, setPreserveOriginalFileName = () => {}, historyEnabled = false, onOpenHistory }) {
   const fileRef = useRef(null)
   const folderRef = useRef(null)
   const editorRef = useRef(null)
@@ -430,7 +431,10 @@ export default function FormatConverter({ navigate }) {
 
   const downloadOne = (item) => {
     if (!item.blob) return
-    downloadBlob(item.blob, `${getBaseName(item.file.name)}_compressed.${output.ext}`)
+    downloadBlob(item.blob, getOutputFileName(item.file.name, output.ext, {
+      preserveOriginalName: preserveOriginalFileName,
+      suffix: '_compressed',
+    }))
     trackEvent('download_success', { tool: 'converter', mode: 'compressor_single', format })
     trackEvent('exported_image', {
       tool: 'converter',
@@ -447,8 +451,13 @@ export default function FormatConverter({ navigate }) {
     setZipDownloading(true)
     try {
       const zip = new JSZip()
+      const usedFileNames = new Set()
       doneItems.forEach(item => {
-        zip.file(`${getBaseName(item.file.name)}_compressed.${output.ext}`, item.blob)
+        const fileName = getOutputFileName(item.file.name, output.ext, {
+          preserveOriginalName: preserveOriginalFileName,
+          suffix: '_compressed',
+        })
+        zip.file(reserveUniqueFileName(fileName, usedFileNames), item.blob)
       })
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       downloadBlob(zipBlob, `tuscale_compressed_${doneItems.length}.zip`)
@@ -492,7 +501,7 @@ export default function FormatConverter({ navigate }) {
 
   return (
     <div className="min-h-screen bg-gray-50/80">
-      <ToolHeader active="converter" navigate={navigate} />
+      <ToolHeader active="converter" navigate={navigate} historyEnabled={historyEnabled} onOpenHistory={onOpenHistory} />
       <main className="max-w-6xl mx-auto px-4 py-6 pb-20 space-y-5">
         <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -687,6 +696,10 @@ export default function FormatConverter({ navigate }) {
                   ))}
                 </div>
                 <p className="text-xs leading-5 text-gray-500">{output.note}</p>
+                <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 cursor-pointer">
+                  <input type="checkbox" checked={preserveOriginalFileName} onChange={(event) => setPreserveOriginalFileName(event.target.checked)} className="mt-0.5 accent-indigo-600" />
+                  <span>保留原文件名<span className="mt-1 block font-normal leading-5 text-gray-400">输出格式不同时，仅更换扩展名。</span></span>
+                </label>
                 {output.quality && (
                   <label className="block space-y-2">
                     <span className="text-xs font-medium text-gray-500">{targetKb > 0 ? '画质上限' : '导出质量'} {quality}%</span>
@@ -783,7 +796,7 @@ function FaqItem({ question, answer }) {
   )
 }
 
-function ToolHeader({ active, navigate }) {
+function ToolHeader({ active, navigate, historyEnabled, onOpenHistory }) {
   const items = [
     { id: 'upscale', label: '图片放大', path: '/' },
     { id: 'converter', label: '图片压缩', path: '/format-converter' },
@@ -807,6 +820,7 @@ function ToolHeader({ active, navigate }) {
             </button>
           ))}
         </nav>
+        <HistoryButton enabled={historyEnabled} onOpen={onOpenHistory} />
       </div>
     </header>
   )

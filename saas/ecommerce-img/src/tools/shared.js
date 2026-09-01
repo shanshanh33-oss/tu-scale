@@ -32,6 +32,30 @@ export const downloadBlob = (blob, fileName) => {
 
 export const getBaseName = (name) => name.replace(/\.[^.]+$/, '')
 
+export const getOutputFileName = (originalName, extension, {
+  preserveOriginalName = false,
+  suffix = '',
+} = {}) => {
+  const baseName = getBaseName(originalName || 'image') || 'image'
+  const normalizedExtension = String(extension || 'png').replace(/^\.+/, '') || 'png'
+  return `${baseName}${preserveOriginalName ? '' : suffix}.${normalizedExtension}`
+}
+
+export const reserveUniqueFileName = (fileName, usedFileNames = new Set()) => {
+  const normalizedName = fileName || 'image'
+  const extensionMatch = normalizedName.match(/(\.[^.]*)$/)
+  const extension = extensionMatch?.[1] || ''
+  const baseName = extension ? normalizedName.slice(0, -extension.length) : normalizedName
+  let candidate = normalizedName
+  let copyNumber = 2
+  while (usedFileNames.has(candidate.toLocaleLowerCase())) {
+    candidate = `${baseName} (${copyNumber})${extension}`
+    copyNumber += 1
+  }
+  usedFileNames.add(candidate.toLocaleLowerCase())
+  return candidate
+}
+
 export const formatBytes = (bytes) => {
   if (!bytes) return '0 KB'
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`

@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Upload, Download, Loader2, Sparkles, CheckCircle, AlertCircle } from 'lucide-react'
 import JSZip from 'jszip'
 import RewardButton from './RewardButton'
+import HistoryButton from './HistoryButton'
 
 const createExportId = () => crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-import { canvasToBlob, downloadBlob, formatBytes, getBaseName, readFileAsDataUrl, readImage, trackEvent } from './shared'
+import { canvasToBlob, downloadBlob, formatBytes, getOutputFileName, readFileAsDataUrl, readImage, reserveUniqueFileName, trackEvent } from './shared'
 
 const mb = (value) => value * 1024 * 1024
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
@@ -446,7 +447,7 @@ const exportCompliantBlob = async (canvas, preset, formatId) => {
   return best
 }
 
-export default function BackgroundTool({ navigate }) {
+export default function BackgroundTool({ navigate, preserveOriginalFileName = false, setPreserveOriginalFileName = () => {}, historyEnabled = false, onOpenHistory }) {
   const batchFileRef = useRef(null)
   const batchFolderRef = useRef(null)
   const containPreviewRef = useRef(null)
@@ -851,6 +852,7 @@ export default function BackgroundTool({ navigate }) {
       const zip = new JSZip()
       const folderName = `${normalizePreset.platform}_${normalizePreset.w}x${normalizePreset.h}_商品图`
       const folder = zip.folder(folderName)
+      const usedFileNames = new Set()
       for (let index = 0; index < batchFiles.length; index++) {
         const item = batchFiles[index]
         const src = await readFileAsDataUrl(item)
@@ -866,7 +868,11 @@ export default function BackgroundTool({ navigate }) {
           background: globalBgColor,
         })
         const { blob, format } = await exportCompliantBlob(canvas, normalizePreset, outputFormat)
-        folder.file(`${getBaseName(item.name)}_${normalizePreset.platform}_${normalizePreset.w}x${normalizePreset.h}.${format.ext}`, blob)
+        const fileName = getOutputFileName(item.name, format.ext, {
+          preserveOriginalName: preserveOriginalFileName,
+          suffix: `_${normalizePreset.platform}_${normalizePreset.w}x${normalizePreset.h}`,
+        })
+        folder.file(reserveUniqueFileName(fileName, usedFileNames), blob)
       }
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       downloadBlob(zipBlob, `${folderName}.zip`)
@@ -900,7 +906,7 @@ export default function BackgroundTool({ navigate }) {
       batchDownloadLockRef.current = false
       setProcessing(false)
     }
-  }, [batchAnalysis, batchFiles, cropOverrides, globalBgColor, normalizeFillRatio, normalizePreset, outputFormat])
+  }, [batchAnalysis, batchFiles, cropOverrides, globalBgColor, normalizeFillRatio, normalizePreset, outputFormat, preserveOriginalFileName])
 
   return (
     <div className="min-h-screen bg-gray-50/80 text-slate-950">
@@ -919,6 +925,7 @@ export default function BackgroundTool({ navigate }) {
               </button>
             ))}
           </nav>
+          <HistoryButton enabled={historyEnabled} onOpen={onOpenHistory} />
         </div>
       </header>
 
@@ -973,6 +980,11 @@ export default function BackgroundTool({ navigate }) {
               <p>当前规范：{normalizePreset.platform} · {normalizePreset.label}，输出 {normalizePreset.w} x {normalizePreset.h}。</p>
               <p>文件上限：{normalizePreset.maxBytes ? formatBytes(normalizePreset.maxBytes) : '未限制'}；批量下载会自动压缩，PNG 超限会转 JPG。</p>
             </div>
+
+            <label className="mt-3 flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600">
+              <input type="checkbox" checked={preserveOriginalFileName} onChange={(event) => setPreserveOriginalFileName(event.target.checked)} className="mt-0.5 accent-blue-600" />
+              <span>保留原文件名<span className="mt-1 block font-normal leading-5 text-slate-400">输出格式不同时，仅更换扩展名；ZIP 内重名会自动编号。</span></span>
+            </label>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button disabled={!batchFiles.length || processing} onClick={analyzeNormalizeFiles} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300">
