@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
+import { lazy, Suspense, useState, useRef, useMemo, useCallback, useEffect, useSyncExternalStore } from 'react'
 import { Upload, Download, ZoomIn, Maximize2, Loader2, Sparkles, X, Image as ImageIcon, FolderOpen, CheckCircle, AlertCircle, FileDown, FileImage, Crop, MessageSquare, Copy, Clock3 } from 'lucide-react'
 import { canStreamAiPngExport, loadModel, processWithAI, upscaleWithAIToPng, isModelLoaded, getModelStatus } from './ai/waifu2x'
 import { BROWSER_AI_INPUT_LIMITS, BROWSER_AI_OUTPUT_LIMITS, canUseDesktopAiService, getAiBackendLabel, getAiModelInputDimensions, getAiOutputMode, getAiRuntimeErrorMessage } from './ai/runtimePolicy'
@@ -14,6 +14,9 @@ import { getOutputFileName, trackEvent } from './tools/shared'
 import { decodeInputImage, getInputDecodeErrorMessage, isHeicFile } from './tools/heic'
 import { createImageZipBlob } from './tools/imageZip'
 import { createFileFromHistoryEntry, createHistoryThumbnail, getHistoryEntry, getHistoryPreferences, purgeExpiredHistoryEntries, saveHistoryEntry, setHistoryPreferences } from './tools/localHistory'
+import { pdfTaskStore } from './tools/pdfTaskStore'
+
+const PdfExtractor = lazy(() => import('./tools/PdfExtractor'))
 
 const QUALITY_PRESETS = [
   { edge: 1080, label: '1080级', desc: '最长边 1080px' },
@@ -26,6 +29,7 @@ const TOOL_NAV = [
   { id: 'upscale', label: '图片放大', path: '/' },
   { id: 'converter', label: '图片压缩', path: '/format-converter' },
   { id: 'product-image', label: '商品图规范化', path: '/product-image' },
+  { id: 'pdf', label: 'PDF 提取', path: '/pdf-extractor' },
   { id: 'contact', label: '反馈联系', path: '/contact' },
 ]
 
@@ -177,6 +181,10 @@ const PAGE_META = {
     title: '商品图规范化工具 - TU Scale',
     description: 'TU Scale 商品图规范化工具，支持白底图、平台尺寸、主体占比、留白和批量导出。',
   },
+  '/pdf-extractor': {
+    title: 'PDF 与批量图片 OCR、图片文字提取、转 PPT - TU Scale',
+    description: 'TU Scale 本地 PDF 与批量图片 OCR 工具，支持提取图片和文字、文件夹批量识别、统一图片比例、每图一页 PPT 和图片合集自动排版。',
+  },
   '/contact': {
     title: '反馈与联系 - TU Scale 本地图片工具箱',
     description: '向 TU Scale 提交功能建议、问题反馈、格式支持请求、批量图片处理需求或合作意向。',
@@ -185,6 +193,7 @@ const PAGE_META = {
 
  function App() {
   const [route, setRoute] = useState(() => window.location.pathname)
+  const pdfTask = useSyncExternalStore(pdfTaskStore.subscribe, pdfTaskStore.getSnapshot, pdfTaskStore.getSnapshot)
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path)
@@ -2555,23 +2564,56 @@ const zipDownloadLockRef = useRef(false)
     </>
   )
 
+  const pdfTaskStatus = pdfTask.parsing
+    ? `PDF 后台解析 ${pdfTask.progress.pageCount ? `${pdfTask.progress.pageNumber}/${pdfTask.progress.pageCount} 页` : '准备中'}`
+    : pdfTask.ocrRunning
+      ? `${pdfTask.sourceType === 'images' ? '图片' : 'PDF'} 后台 OCR ${pdfTask.ocrProgress.pageCount ? `${Math.min(pdfTask.ocrProgress.completed + 1, pdfTask.ocrProgress.pageCount)}/${pdfTask.ocrProgress.pageCount}` : '准备中'}`
+      : pdfTask.exporting
+        ? 'PDF / 图片正在后台生成文件'
+        : pdfTask.result
+          ? pdfTask.sourceType === 'images'
+            ? `批量图片处理完成 · ${pdfTask.result.pageCount} 张`
+            : `PDF 处理完成 · ${pdfTask.result.pageCount} 页`
+          : ''
+  const pdfTaskIndicator = route !== '/pdf-extractor' && pdfTaskStatus ? (
+    <button type="button" onClick={() => navigate('/pdf-extractor')}
+      className="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-3 rounded-xl border border-indigo-200 bg-white px-4 py-3 text-left shadow-xl hover:bg-indigo-50">
+      {pdfTask.parsing || pdfTask.ocrRunning || pdfTask.exporting
+        ? <Loader2 className="h-5 w-5 shrink-0 animate-spin text-indigo-500" />
+        : <CheckCircle className="h-5 w-5 shrink-0 text-emerald-500" />}
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold text-gray-800">{pdfTaskStatus}</span>
+        <span className="block truncate text-xs text-gray-500">{pdfTask.file?.name} · 点击查看</span>
+      </span>
+    </button>
+  ) : null
+
   if (route === '/format-converter') return <>
     <FormatConverter navigate={navigate} preserveOriginalFileName={preserveOriginalFileName} setPreserveOriginalFileName={setPreserveOriginalFileName}
       historyEnabled={historyPreferences.enabled} onOpenHistory={() => setShowHistory(true)} />
     {historyOverlay}
+    {pdfTaskIndicator}
   </>
+  if (route === '/pdf-extractor') return (
+    <Suspense fallback={<PageLoading label="正在加载 PDF 工具…" />}>
+      <PdfExtractor navigate={navigate} />
+    </Suspense>
+  )
   if (route === '/product-image') return <>
     <BackgroundTool navigate={navigate} preserveOriginalFileName={preserveOriginalFileName} setPreserveOriginalFileName={setPreserveOriginalFileName}
       historyEnabled={historyPreferences.enabled} onOpenHistory={() => setShowHistory(true)} />
     {historyOverlay}
+    {pdfTaskIndicator}
   </>
   if (route === '/contact') return <>
     <ContactPage navigate={navigate} historyEnabled={historyPreferences.enabled} onOpenHistory={() => setShowHistory(true)} />
     {historyOverlay}
+    {pdfTaskIndicator}
   </>
 
  return (
     <div className="min-h-screen bg-gray-50/80">
+      {pdfTaskIndicator}
       <header className="bg-white/95 backdrop-blur-sm border-b border-gray-100 px-6 py-3 sticky top-0 z-10 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center gap-4">
           <img src="/logo.png" alt="TU Scale" className="h-16 sm:h-18 w-auto shrink-0" />
@@ -3783,6 +3825,17 @@ const zipDownloadLockRef = useRef(false)
           <div className="text-center py-2 text-white/25 text-[11px] shrink-0 bg-black/40">{'\u6eda\u52a8\u67e5\u770b\u7ec6\u8282 \u00b7 \u6ed1\u5757\u7f29\u653e \u00b7 \u8054\u52a8\u6eda\u52a8\u53ef\u5f00\u5173 \u00b7 \u70b9\u51fb\u7a7a\u767d\u5173\u95ed'}</div>
         </div>
       )}
+    </div>
+  )
+}
+
+function PageLoading({ label }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50/80 px-4">
+      <div className="rounded-xl border border-gray-200 bg-white px-6 py-5 text-center shadow-sm">
+        <Loader2 className="mx-auto h-6 w-6 animate-spin text-indigo-500" />
+        <p className="mt-3 text-sm font-semibold text-gray-700">{label}</p>
+      </div>
     </div>
   )
 }
