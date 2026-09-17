@@ -16,12 +16,15 @@ const ALLOWED_EVENTS = new Set([
   'download_zip',
   'download_success',
   'exported_image',
+  'pdf_source_uploaded',
+  'pdf_process_success',
+  'pdf_export_success',
   'survey_submit',
 ])
 
 const ID_PATTERN = /^[a-z]_[a-zA-Z0-9-]{8,80}$/
 const EVENT_LOG_TTL = 60 * 60 * 24 * 60
-const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image', 'contact'])
+const ALLOWED_TOOLS = new Set(['upscale', 'converter', 'product_image', 'pdf_extractor', 'contact'])
 const IDEMPOTENT_EVENTS = new Set(['download_success', 'exported_image'])
 const MAX_BATCH_EVENTS = 5
 const SOURCE_VALUES = new Set(['direct', 'google', 'baidu', 'external'])

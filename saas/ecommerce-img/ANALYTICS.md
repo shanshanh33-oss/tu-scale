@@ -40,6 +40,9 @@ No image content, file names, email addresses, or user IDs are collected.
 - `download_zip`
 - `download_success`
 - `exported_image`
+- `pdf_source_uploaded`
+- `pdf_process_success`
+- `pdf_export_success`
 - `survey_submit`
 
-Events are split into `upscale`, `converter`, `product_image`, `contact`, and compatible `unknown` historical data. The dashboard shows cumulative and today counts for fixed image-upscaler features such as crop, smart detection, smart denoise, moire repair, AI upscale, and color-fringe repair. Only fixed categorical analytics dimensions are stored; arbitrary button text, paths, file names, image content, contact details, and raw user identities are not included in the dashboard response.
+Events are split into `upscale`, `converter`, `product_image`, `pdf_extractor`, `contact`, and compatible `unknown` historical data. The PDF tool records only anonymous page visits, accepted upload tasks, successful local processing tasks, and successful export operations; PDF/image content, OCR text, file names, and template contents are never included. The dashboard also shows cumulative and today counts for fixed image-upscaler features such as crop, smart detection, smart denoise, moire repair, AI upscale, and color-fringe repair. Only fixed categorical analytics dimensions are stored; arbitrary button text, paths, file names, image content, contact details, and raw user identities are not included in the dashboard response.

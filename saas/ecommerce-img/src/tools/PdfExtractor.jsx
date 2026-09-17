@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import JSZip from 'jszip'
 import RewardButton from './RewardButton'
-import { downloadBlob, formatBytes } from './shared'
+import { downloadBlob, formatBytes, trackEvent } from './shared'
 import {
   MAX_EXTRACTED_IMAGES,
   convertExtractedImage,
@@ -162,8 +162,12 @@ export default function PdfExtractor({ navigate }) {
   const handlePdf = useCallback(async (nextFile) => {
     if (!nextFile) return
     setShowEmptyTextPages(false)
+    trackEvent('pdf_source_uploaded')
     const parsed = await pdfTaskStore.start(nextFile, parsePdfFile)
-    if (parsed) setActiveTab(parsed.images.length ? 'images' : 'text')
+    if (parsed) {
+      trackEvent('pdf_process_success')
+      setActiveTab(parsed.images.length ? 'images' : 'text')
+    }
   }, [])
 
   const handleImageFiles = useCallback(async (fileList) => {
@@ -175,12 +179,14 @@ export default function PdfExtractor({ navigate }) {
       return
     }
     setShowEmptyTextPages(false)
+    trackEvent('pdf_source_uploaded')
     const skipped = incoming.length - supported.length
     const parsed = await pdfTaskStore.startImageOcr(
       supported,
       options => recognizeImageFiles(supported, { ...options, splitCollages }),
     )
     if (parsed) {
+      trackEvent('pdf_process_success')
       setActiveTab('text')
       if (skipped) setMessage(`${pdfTaskStore.getSnapshot().message}；已跳过 ${skipped} 个不支持的文件`)
     }
@@ -196,7 +202,8 @@ export default function PdfExtractor({ navigate }) {
       setError('')
       return
     }
-    await pdfTaskStore.startOcr(options => recognizePdfPages(file, targetPages, options))
+    const recognized = await pdfTaskStore.startOcr(options => recognizePdfPages(file, targetPages, options))
+    if (recognized) trackEvent('pdf_process_success')
   }
 
   const handleTemplateFile = async (nextFile) => {
@@ -254,6 +261,7 @@ export default function PdfExtractor({ navigate }) {
         onProgress: ({ completed, total }) => setMessage(`正在套用模板 ${completed}/${total}`),
       })
       downloadBlob(blob, `${sanitizePdfName(file?.name)}_套用模板.pptx`)
+      trackEvent('pdf_export_success')
       setMessage(includeTemplateText
         ? `模板 PPT 已生成：${selectedImages.length} 个内容页，图片和识别文字均可编辑`
         : `模板 PPT 已生成：${selectedImages.length} 个内容页，图片可编辑`)
@@ -291,6 +299,7 @@ export default function PdfExtractor({ navigate }) {
       const blob = await convertExtractedImage(image, getRasterOptions())
       const extension = RASTER_FORMATS.find(option => option.id === rasterFormat)?.ext || 'png'
       downloadBlob(blob, replaceExtension(image.fileName, extension))
+      trackEvent('pdf_export_success')
     } catch (downloadError) {
       setError(getPdfTaskErrorMessage(downloadError))
     } finally {
@@ -318,6 +327,7 @@ export default function PdfExtractor({ navigate }) {
       const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })
       const ratioSuffix = ratioId === 'original' ? '原比例' : ratioId
       downloadBlob(zipBlob, `${sanitizePdfName(file?.name)}_提取图片_${ratioSuffix}_${extension}.zip`)
+      trackEvent('pdf_export_success')
       setMessage(`已保存 ${selectedImages.length} 张 ${ratioSuffix} ${extension.toUpperCase()} 图片`)
     } catch (zipError) {
       setError(getPdfTaskErrorMessage(zipError))
@@ -330,6 +340,7 @@ export default function PdfExtractor({ navigate }) {
     if (!result) return
     const text = combinePageTexts(result.pages)
     downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${sanitizePdfName(file?.name)}_文字.txt`)
+    trackEvent('pdf_export_success')
     setMessage('已保存合并文字文件')
   }
 
@@ -348,6 +359,7 @@ export default function PdfExtractor({ navigate }) {
       })
       const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' })
       downloadBlob(zipBlob, `${sanitizePdfName(file?.name)}_分页文字.zip`)
+      trackEvent('pdf_export_success')
       setMessage(`已保存 ${result.pages.length} 个分页文字文件`)
     } catch (zipError) {
       setError(getPdfTaskErrorMessage(zipError))
@@ -391,6 +403,7 @@ export default function PdfExtractor({ navigate }) {
       })
       const suffix = mode === 'collage' ? '图片合集' : '每图一页'
       downloadBlob(blob, `${sanitizePdfName(file?.name)}_${suffix}.pptx`)
+      trackEvent('pdf_export_success')
       setMessage(`PPT 已生成，包含 ${selectedImages.length} 个可编辑图片对象`)
     } catch (pptError) {
       setError(getPdfTaskErrorMessage(pptError))

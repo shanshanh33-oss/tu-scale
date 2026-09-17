@@ -69,13 +69,17 @@ test('tracking accepts the previously missing events and preserves safe dimensio
             event: 'feature_click',
             data: { tool: 'upscale', feature: 'smart_denoise' },
           },
+          {
+            event: 'pdf_source_uploaded',
+            data: { tool: 'pdf_extractor', visitorId: 'v_pdfsource', sessionId: 's_pdfsource' },
+          },
         ],
       }),
     }),
   })
 
   assert.equal(response.status, 200)
-  assert.equal((await response.json()).count, 3)
+  assert.equal((await response.json()).count, 4)
   const eventKey = [...kv.values.keys()].find(key => key.startsWith('event:'))
   const events = kv.metadata.get(eventKey).events
   assert.equal(events[0].event, 'crop_preset_selected')
@@ -87,6 +91,8 @@ test('tracking accepts the previously missing events and preserves safe dimensio
   assert.equal(events[2].event, 'feature_click')
   assert.equal(events[2].tool, 'upscale')
   assert.equal(events[2].analytics.feature, 'smart_denoise')
+  assert.equal(events[3].event, 'pdf_source_uploaded')
+  assert.equal(events[3].tool, 'pdf_extractor')
 })
 
 test('tracking still rejects unknown event names', async () => {
@@ -148,6 +154,30 @@ test('current-day statistics return live paginated event data', async () => {
   assert.deepEqual(second.summary.business.feature, { moire_repair: 1 })
 })
 
+test('PDF tool usage is kept separate from image-tool metrics', async () => {
+  const day = chinaDay()
+  const kv = new FakeKv()
+  await kv.put(`event:${day}:1:pdf`, '{}', {
+    metadata: {
+      events: [
+        { event: 'page_view', amount: 1, tool: 'pdf_extractor', visitorId: 'v_pdfvisitor', analytics: {} },
+        { event: 'pdf_source_uploaded', amount: 1, tool: 'pdf_extractor', visitorId: 'v_pdfvisitor', analytics: {} },
+        { event: 'pdf_process_success', amount: 1, tool: 'pdf_extractor', visitorId: 'v_pdfvisitor', analytics: {} },
+        { event: 'pdf_export_success', amount: 1, tool: 'pdf_extractor', visitorId: 'v_pdfvisitor', analytics: {} },
+      ],
+    },
+  })
+
+  const response = await readStats(statsContext(kv, day))
+  const data = await response.json()
+  assert.equal(data.summary.tools.pdf_extractor.unique_visitor, 1)
+  assert.equal(data.summary.tools.pdf_extractor.page_view, 1)
+  assert.equal(data.summary.tools.pdf_extractor.pdf_source_uploaded, 1)
+  assert.equal(data.summary.tools.pdf_extractor.pdf_process_success, 1)
+  assert.equal(data.summary.tools.pdf_extractor.pdf_export_success, 1)
+  assert.equal(data.summary.tools.upscale.page_view, 0)
+})
+
 test('any unfinalized historical day is backfilled and stored', async () => {
   const day = chinaDay(3)
   const kv = new FakeKv(1)
@@ -180,6 +210,9 @@ test('statistics dashboard exposes the completed metrics and valid client script
   const body = await response.text()
   assert.equal(response.status, 200)
   assert.match(body, /反馈联系/)
+  assert.match(body, /PDF \/ OCR \/ PPT 使用情况/)
+  assert.match(body, /pdf_source_uploaded/)
+  assert.match(body, /pdf_extractor/)
   assert.match(body, /crop_preset_selected/)
   assert.match(body, /batch_normalize/)
   assert.match(body, /feature_click/)

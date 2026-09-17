@@ -18,6 +18,9 @@ const EVENTS = [
   'download_zip',
   'download_success',
   'exported_image',
+  'pdf_source_uploaded',
+  'pdf_process_success',
+  'pdf_export_success',
   'survey_submit',
 ]
 
@@ -26,13 +29,14 @@ const METRICS = [
   'unique_visitor',
 ]
 
-const TOOLS = ['upscale', 'converter', 'product_image', 'contact', 'unknown']
+const TOOLS = ['upscale', 'converter', 'product_image', 'pdf_extractor', 'contact', 'unknown']
 const STATS_START_DATE = '2026-06-28'
 
 const TOOL_LABELS = {
   upscale: '图片放大',
   converter: '图片压缩',
   product_image: '商品图规范化',
+  pdf_extractor: 'PDF / OCR / PPT',
   contact: '反馈联系',
   unknown: '未细分旧数据',
 }
@@ -73,6 +77,9 @@ const LABELS = {
   download_zip: '旧版 ZIP 图片累计（可能重复）',
   download_success: '成功下载操作',
   exported_image: '首次成功导出图片',
+  pdf_source_uploaded: 'PDF 工具上传任务',
+  pdf_process_success: 'PDF 工具处理成功',
+  pdf_export_success: 'PDF 工具导出成功',
   survey_submit: '功能意愿反馈',
 }
 
@@ -597,6 +604,10 @@ const renderStatsShell = () => `<!doctype html>
       <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计独立访客</th><th>今日独立访客</th><th>上传 累计/今日</th><th>成功 累计/今日</th><th>首次导出 累计/今日</th></tr></thead><tbody id="toolRows"></tbody></table></div>
     </section>
     <section>
+      <div class="section-head"><h2>PDF / OCR / PPT 使用情况</h2><p>只统计匿名操作次数，不记录文件内容、文字或文件名。</p></div>
+      <div class="table-wrap"><table><thead><tr><th>累计独立访客</th><th>今日独立访客</th><th>页面浏览 累计/今日</th><th>上传任务 累计/今日</th><th>处理成功 累计/今日</th><th>导出成功 累计/今日</th></tr></thead><tbody id="pdfToolRows"></tbody></table></div>
+    </section>
+    <section>
       <div class="section-head"><h2>图片放大内部功能点击</h2><p>开关类只在用户主动开启时计数，关闭不重复计数。</p></div>
       <div class="table-wrap"><table><thead><tr><th>功能</th><th>累计启用/点击</th><th>今日启用/点击</th></tr></thead><tbody id="featureRows"></tbody></table></div>
     </section>
@@ -705,6 +716,9 @@ const renderStatsShell = () => `<!doctype html>
         const todayValue = today.tools?.[tool] || emptyMetrics();
         return '<tr><td><b>' + TOOL_LABELS[tool] + '</b></td><td>' + fmt(total.unique_visitor) + '</td><td>' + fmt(todayValue.unique_visitor) + '</td><td>' + fmt(total.image_uploaded) + ' / ' + fmt(todayValue.image_uploaded) + '</td><td>' + fmt(sum(total, ['process_success', 'batch_item_success'])) + ' / ' + fmt(sum(todayValue, ['process_success', 'batch_item_success'])) + '</td><td>' + fmt(total.exported_image) + ' / ' + fmt(todayValue.exported_image) + '</td></tr>';
       }).join('');
+      const pdfTotal = totalTools.pdf_extractor || emptyMetrics();
+      const pdfToday = today.tools?.pdf_extractor || emptyMetrics();
+      document.getElementById('pdfToolRows').innerHTML = '<tr><td><b>' + fmt(pdfTotal.unique_visitor) + '</b></td><td><b>' + fmt(pdfToday.unique_visitor) + '</b></td><td>' + fmt(pdfTotal.page_view) + ' / ' + fmt(pdfToday.page_view) + '</td><td>' + fmt(pdfTotal.pdf_source_uploaded) + ' / ' + fmt(pdfToday.pdf_source_uploaded) + '</td><td>' + fmt(pdfTotal.pdf_process_success) + ' / ' + fmt(pdfToday.pdf_process_success) + '</td><td>' + fmt(pdfTotal.pdf_export_success) + ' / ' + fmt(pdfToday.pdf_export_success) + '</td></tr>';
       document.getElementById('featureRows').innerHTML = Object.entries(FEATURE_LABELS).map(([feature, label]) => '<tr><td><b>' + label + '</b></td><td>' + fmt(totalBusiness.feature[feature]) + '</td><td>' + fmt(today.business?.feature?.[feature]) + '</td></tr>').join('');
       document.getElementById('businessRows').innerHTML = Object.entries(BUSINESS_LABELS).map(([field, label]) => {
         const values = Object.entries(totalBusiness[field]).sort((a, b) => b[1] - a[1]);

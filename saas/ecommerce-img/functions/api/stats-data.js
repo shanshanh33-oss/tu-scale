@@ -18,11 +18,14 @@ const EVENTS = [
   'download_zip',
   'download_success',
   'exported_image',
+  'pdf_source_uploaded',
+  'pdf_process_success',
+  'pdf_export_success',
   'survey_submit',
 ]
 
 const METRICS = [...EVENTS, 'unique_visitor']
-const TOOLS = ['upscale', 'converter', 'product_image', 'contact', 'unknown']
+const TOOLS = ['upscale', 'converter', 'product_image', 'pdf_extractor', 'contact', 'unknown']
 const PAGE_SIZE = 1000
 const MAX_SETTLEMENT_PAGES = 20
 const MAX_BACKFILL_DAYS = 1
