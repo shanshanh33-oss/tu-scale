@@ -247,3 +247,80 @@ test('批量 OCR 可主动取消', async () => {
   assert.equal(store.getSnapshot().error, '')
   assert.equal(store.getSnapshot().message, '已取消批量图片 OCR')
 })
+
+test('文档压缩在页面取消订阅后继续并保留可下载结果', async () => {
+  let finishCompression
+  let receivedPreset
+  const store = createPdfTaskStore()
+  const file = { name: '大文件.pptx', size: 1000, type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }
+  const runCompression = (_file, { presetId, signal, onProgress }) => new Promise((resolve) => {
+    receivedPreset = presetId
+    assert.equal(signal.aborted, false)
+    onProgress({ completed: 3, total: 10, percent: 30, stage: '压缩图片 3/10' })
+    finishCompression = () => resolve({
+      blob: new Blob(['compressed']),
+      kind: 'pptx',
+      imageCount: 10,
+      changedImageCount: 8,
+      originalSize: 1000,
+      compressedSize: 600,
+      fileName: '大文件_压缩.pptx',
+    })
+  })
+
+  const unsubscribe = store.subscribe(() => {})
+  const pending = store.startCompression(file, 'pptx', 'small', runCompression)
+  unsubscribe()
+  assert.equal(store.getSnapshot().compression.processing, true)
+  assert.equal(store.getSnapshot().exporting, 'compress-pptx')
+  assert.equal(store.getSnapshot().compression.progress.percent, 30)
+
+  finishCompression()
+  const result = await pending
+  assert.equal(receivedPreset, 'small')
+  assert.equal(result.fileName, '大文件_压缩.pptx')
+  assert.equal(store.getSnapshot().compression.processing, false)
+  assert.equal(store.getSnapshot().compression.result.compressedSize, 600)
+  assert.match(store.getSnapshot().compression.message, /减少 40%/)
+})
+
+test('清空提取结果不会中止正在后台执行的文档压缩', async () => {
+  let finishCompression
+  let compressionSignal
+  const store = createPdfTaskStore()
+  const file = { name: '扫描件.pdf', size: 500, type: 'application/pdf' }
+  const pending = store.startCompression(file, 'pdf', 'balanced', (_file, { signal }) => new Promise((resolve) => {
+    compressionSignal = signal
+    finishCompression = () => resolve({
+      blob: new Blob(['pdf']),
+      kind: 'pdf',
+      originalSize: 500,
+      compressedSize: 300,
+      fileName: '扫描件_压缩.pdf',
+    })
+  }))
+
+  store.reset()
+  assert.equal(compressionSignal.aborted, false)
+  assert.equal(store.getSnapshot().compression.processing, true)
+  assert.equal(store.getSnapshot().exporting, 'compress-pdf')
+
+  finishCompression()
+  await pending
+  assert.equal(store.getSnapshot().compression.result.fileName, '扫描件_压缩.pdf')
+})
+
+test('文档压缩可主动取消', async () => {
+  const store = createPdfTaskStore()
+  const file = { name: '扫描件.pdf', size: 500, type: 'application/pdf' }
+  const pending = store.startCompression(file, 'pdf', 'balanced', (_file, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true })
+  }))
+
+  store.cancelCompression()
+  await pending
+  assert.equal(store.getSnapshot().compression.processing, false)
+  assert.equal(store.getSnapshot().compression.error, '')
+  assert.equal(store.getSnapshot().compression.message, '已取消文档压缩')
+  assert.equal(store.getSnapshot().exporting, '')
+})

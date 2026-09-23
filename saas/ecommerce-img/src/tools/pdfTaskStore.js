@@ -1,5 +1,17 @@
 const INITIAL_PROGRESS = { pageNumber: 0, pageCount: 0, imageCount: 0, stage: '' }
 const INITIAL_OCR_PROGRESS = { pageNumber: 0, pageCount: 0, completed: 0, progress: 0, stage: '' }
+const INITIAL_COMPRESSION_PROGRESS = { completed: 0, total: 0, percent: 0, stage: '' }
+
+const createInitialCompression = () => ({
+  file: null,
+  kind: '',
+  presetId: 'balanced',
+  processing: false,
+  progress: INITIAL_COMPRESSION_PROGRESS,
+  result: null,
+  error: '',
+  message: '',
+})
 
 const createInitialSnapshot = () => ({
   file: null,
@@ -12,6 +24,7 @@ const createInitialSnapshot = () => ({
   exporting: '',
   progress: INITIAL_PROGRESS,
   ocrProgress: INITIAL_OCR_PROGRESS,
+  compression: createInitialCompression(),
   error: '',
   message: '',
 })
@@ -29,8 +42,10 @@ export const createPdfTaskStore = ({
   let snapshot = createInitialSnapshot()
   let activeController = null
   let activeOcrController = null
+  let activeCompressionController = null
   let activeRunId = 0
   let activeOcrRunId = 0
+  let activeCompressionRunId = 0
   const listeners = new Set()
   const objectUrls = new Set()
 
@@ -116,12 +131,111 @@ export const createPdfTaskStore = ({
     activeController = null
     activeOcrController = null
     clearObjectUrls()
-    snapshot = createInitialSnapshot()
+    const compression = snapshot.compression
+    snapshot = {
+      ...createInitialSnapshot(),
+      compression,
+      exporting: compression.processing ? `compress-${compression.kind}` : '',
+    }
     listeners.forEach(listener => listener())
   }
 
   const cancel = () => activeController?.abort()
   const cancelOcr = () => activeOcrController?.abort()
+  const cancelCompression = () => activeCompressionController?.abort()
+
+  const clearCompression = () => {
+    activeCompressionRunId += 1
+    activeCompressionController?.abort()
+    activeCompressionController = null
+    update({
+      exporting: String(snapshot.exporting).startsWith('compress-') ? '' : snapshot.exporting,
+      compression: createInitialCompression(),
+    })
+  }
+
+  const startCompression = async (file, kind, presetId, runCompression) => {
+    if (!file || !['pdf', 'pptx'].includes(kind)) {
+      update({
+        compression: { ...createInitialCompression(), error: '请选择 PDF 或 PPTX 文件' },
+      })
+      return null
+    }
+    if (snapshot.parsing || snapshot.ocrRunning || snapshot.exporting) {
+      update({
+        compression: { ...snapshot.compression, error: '请等待当前任务完成后再压缩文档', message: '' },
+      })
+      return null
+    }
+    if (typeof runCompression !== 'function') {
+      update({
+        compression: { ...snapshot.compression, error: '文档压缩器未正确加载', message: '' },
+      })
+      return null
+    }
+
+    activeCompressionRunId += 1
+    const runId = activeCompressionRunId
+    activeCompressionController?.abort()
+    const controller = new AbortController()
+    activeCompressionController = controller
+    update({
+      exporting: `compress-${kind}`,
+      compression: {
+        file,
+        kind,
+        presetId,
+        processing: true,
+        progress: { ...INITIAL_COMPRESSION_PROGRESS, stage: kind === 'pdf' ? '正在打开 PDF' : '正在打开 PPTX' },
+        result: null,
+        error: '',
+        message: '文档正在浏览器本地压缩，可切换到 TU Scale 其他页面',
+      },
+    })
+
+    try {
+      const result = await runCompression(file, {
+        presetId,
+        signal: controller.signal,
+        onProgress: progress => {
+          if (activeCompressionRunId === runId) {
+            update({ compression: { ...snapshot.compression, progress } })
+          }
+        },
+      })
+      if (activeCompressionRunId !== runId) return null
+      const savedBytes = (result.originalSize || 0) - (result.compressedSize || 0)
+      update({
+        exporting: '',
+        compression: {
+          ...snapshot.compression,
+          processing: false,
+          progress: { ...snapshot.compression.progress, percent: 100, stage: '压缩完成' },
+          result,
+          error: '',
+          message: savedBytes > 0
+            ? `压缩完成，减少 ${Math.round((savedBytes / result.originalSize) * 100)}%`
+            : '压缩完成；该文件已经较精简，输出体积没有继续减小',
+        },
+      })
+      return result
+    } catch (error) {
+      if (activeCompressionRunId !== runId) return null
+      const cancelled = error?.name === 'AbortError'
+      update({
+        exporting: '',
+        compression: {
+          ...snapshot.compression,
+          processing: false,
+          error: cancelled ? '' : (error?.message || '文档压缩失败，请换一个文件重试'),
+          message: cancelled ? '已取消文档压缩' : '',
+        },
+      })
+      return null
+    } finally {
+      if (activeCompressionRunId === runId) activeCompressionController = null
+    }
+  }
 
   const start = async (file, parsePdfFile) => {
     if (!file || (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name))) {
@@ -130,6 +244,10 @@ export const createPdfTaskStore = ({
     }
     if (typeof parsePdfFile !== 'function') {
       update({ error: 'PDF 解析器未正确加载', message: '' })
+      return null
+    }
+    if (snapshot.compression.processing) {
+      update({ error: '请等待文档压缩完成后再解析 PDF', message: '' })
       return null
     }
 
@@ -320,6 +438,10 @@ export const createPdfTaskStore = ({
       update({ error: 'OCR 识别器未正确加载', message: '' })
       return null
     }
+    if (snapshot.compression.processing) {
+      update({ error: '请等待文档压缩完成后再识别图片', message: '' })
+      return null
+    }
 
     activeRunId += 1
     activeOcrRunId += 1
@@ -443,11 +565,14 @@ export const createPdfTaskStore = ({
 
   return {
     cancel,
+    cancelCompression,
     cancelOcr,
+    clearCompression,
     getSnapshot,
     reset,
     setSelectedIds,
     start,
+    startCompression,
     startImageOcr,
     startOcr,
     subscribe,

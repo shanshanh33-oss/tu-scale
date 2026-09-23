@@ -182,8 +182,8 @@ const PAGE_META = {
     description: 'TU Scale 商品图规范化工具，支持白底图、平台尺寸、主体占比、留白和批量导出。',
   },
   '/pdf-extractor': {
-    title: 'PDF 与批量图片 OCR、图片文字提取、转 PPT - TU Scale',
-    description: 'TU Scale 本地 PDF 与批量图片 OCR 工具，支持提取图片和文字、文件夹批量识别、统一图片比例、每图一页 PPT 和图片合集自动排版。',
+    title: 'PDF/PPT 压缩、PDF 与图片 OCR、转 PPT - TU Scale',
+    description: 'TU Scale 本地 PDF/PPTX 压缩与 OCR 工具，支持提取 PDF 图片和文字、批量图片识别、统一图片比例、每图一页 PPT 和图片合集自动排版。',
   },
   '/contact': {
     title: '反馈与联系 - TU Scale 本地图片工具箱',
@@ -2568,8 +2568,12 @@ const zipDownloadLockRef = useRef(false)
     ? `PDF 后台解析 ${pdfTask.progress.pageCount ? `${pdfTask.progress.pageNumber}/${pdfTask.progress.pageCount} 页` : '准备中'}`
     : pdfTask.ocrRunning
       ? `${pdfTask.sourceType === 'images' ? '图片' : 'PDF'} 后台 OCR ${pdfTask.ocrProgress.pageCount ? `${Math.min(pdfTask.ocrProgress.completed + 1, pdfTask.ocrProgress.pageCount)}/${pdfTask.ocrProgress.pageCount}` : '准备中'}`
+      : pdfTask.compression?.processing
+        ? `${pdfTask.compression.kind.toUpperCase()} 后台压缩 ${Math.round(pdfTask.compression.progress.percent || 0)}%`
       : pdfTask.exporting
         ? 'PDF / 图片正在后台生成文件'
+        : pdfTask.compression?.result
+          ? `${pdfTask.compression.kind.toUpperCase()} 压缩完成 · 点击下载`
         : pdfTask.result
           ? pdfTask.sourceType === 'images'
             ? `批量图片处理完成 · ${pdfTask.result.pageCount} 张`
@@ -2583,7 +2587,7 @@ const zipDownloadLockRef = useRef(false)
         : <CheckCircle className="h-5 w-5 shrink-0 text-emerald-500" />}
       <span className="min-w-0">
         <span className="block truncate text-sm font-semibold text-gray-800">{pdfTaskStatus}</span>
-        <span className="block truncate text-xs text-gray-500">{pdfTask.file?.name} · 点击查看</span>
+        <span className="block truncate text-xs text-gray-500">{(pdfTask.compression?.processing || pdfTask.compression?.result) ? pdfTask.compression.file?.name : pdfTask.file?.name} · 点击查看</span>
       </span>
     </button>
   ) : null

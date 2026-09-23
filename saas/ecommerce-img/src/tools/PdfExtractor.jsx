@@ -20,6 +20,12 @@ import {
 } from 'lucide-react'
 import JSZip from 'jszip'
 import RewardButton from './RewardButton'
+import {
+  DOCUMENT_COMPRESSION_PRESETS,
+  compressPdfFile,
+  compressPptxFile,
+  getDocumentCompressionKind,
+} from './documentCompression'
 import { downloadBlob, formatBytes, trackEvent } from './shared'
 import {
   MAX_EXTRACTED_IMAGES,
@@ -66,6 +72,7 @@ export default function PdfExtractor({ navigate }) {
   const imageInputRef = useRef(null)
   const folderInputRef = useRef(null)
   const templateInputRef = useRef(null)
+  const compressionInputRef = useRef(null)
   const task = useSyncExternalStore(pdfTaskStore.subscribe, pdfTaskStore.getSnapshot, pdfTaskStore.getSnapshot)
   const {
     file,
@@ -77,6 +84,7 @@ export default function PdfExtractor({ navigate }) {
     exporting,
     progress,
     ocrProgress,
+    compression,
     error,
     message,
   } = task
@@ -85,6 +93,7 @@ export default function PdfExtractor({ navigate }) {
     return existingResult && !existingResult.images.length ? 'text' : 'images'
   })
   const [dragOver, setDragOver] = useState(false)
+  const [compressionDragOver, setCompressionDragOver] = useState(false)
   const [showSmallImages, setShowSmallImages] = useState(false)
   const [showEmptyTextPages, setShowEmptyTextPages] = useState(false)
   const [ratioId, setRatioId] = useState('original')
@@ -99,6 +108,7 @@ export default function PdfExtractor({ navigate }) {
   const [templateSlideNumber, setTemplateSlideNumber] = useState(1)
   const [templateLoading, setTemplateLoading] = useState(false)
   const [includeTemplateText, setIncludeTemplateText] = useState(true)
+  const [compressionPreset, setCompressionPreset] = useState('balanced')
 
   const setSelectedIds = useCallback(nextValue => pdfTaskStore.setSelectedIds(nextValue), [])
   const setExporting = useCallback(value => pdfTaskStore.update({ exporting: value }), [])
@@ -150,6 +160,23 @@ export default function PdfExtractor({ navigate }) {
     return Math.max(3, (finished / ocrProgress.pageCount) * 100)
   }, [ocrProgress])
   const busy = parsing || ocrRunning || !!exporting
+
+  const handleDocumentCompression = useCallback(async (nextFile) => {
+    if (!nextFile) return
+    const kind = getDocumentCompressionKind(nextFile)
+    const compressor = kind === 'pdf' ? compressPdfFile : kind === 'pptx' ? compressPptxFile : null
+    await pdfTaskStore.startCompression(
+      nextFile,
+      kind,
+      compressionPreset,
+      compressor,
+    )
+  }, [compressionPreset])
+
+  const handleCompressedDownload = useCallback(() => {
+    if (!compression.result?.blob) return
+    downloadBlob(compression.result.blob, compression.result.fileName)
+  }, [compression.result])
 
   const resetResult = useCallback(() => {
     pdfTaskStore.reset()
@@ -417,8 +444,154 @@ export default function PdfExtractor({ navigate }) {
       <ToolHeader navigate={navigate} />
       <main className="mx-auto max-w-6xl space-y-5 px-4 py-6 pb-24">
         <section className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
-          <p className="text-sm font-semibold text-indigo-800">PDF 与图片在浏览器本地解析和 OCR，文件不会上传服务器</p>
+          <p className="text-sm font-semibold text-indigo-800">PDF、PPTX 与图片都在浏览器本地处理，文件不会上传服务器</p>
           <p className="mt-1 text-xs leading-5 text-indigo-600">任务可在切换 TU Scale 页面或浏览器标签后继续；如果浏览器冻结、关闭或刷新此标签页，任务会暂停或结束。</p>
+        </section>
+
+        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight">压缩 PDF / PPT</h2>
+              <p className="mt-1 text-sm leading-6 text-gray-500">不设固定文件大小或页数上限，实际处理能力取决于浏览器可用内存。压缩全程在本机完成。</p>
+            </div>
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">本地处理</span>
+          </div>
+
+          <input ref={compressionInputRef} type="file"
+            accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx"
+            className="hidden"
+            onChange={(event) => {
+              const nextFile = event.target.files?.[0]
+              event.target.value = ''
+              handleDocumentCompression(nextFile)
+            }} />
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <SettingsSection title="压缩强度">
+              <div className="space-y-2">
+                {DOCUMENT_COMPRESSION_PRESETS.map(option => (
+                  <label key={option.id}
+                    className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2.5 transition-colors ${compressionPreset === option.id ? 'border-indigo-200 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+                    <input type="radio" name="document-compression-preset" value={option.id}
+                      checked={compressionPreset === option.id}
+                      disabled={compression.processing}
+                      onChange={() => setCompressionPreset(option.id)}
+                      className="mt-0.5 h-4 w-4 border-gray-300 text-indigo-600" />
+                    <span>
+                      <span className="block text-xs font-semibold text-gray-800">{option.label}</span>
+                      <span className="mt-0.5 block text-[11px] leading-5 text-gray-500">{option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </SettingsSection>
+
+            <div className="min-w-0">
+              {!compression.file ? (
+                <div>
+                  <button type="button" onClick={() => compressionInputRef.current?.click()}
+                    onDragOver={(event) => { event.preventDefault(); setCompressionDragOver(true) }}
+                    onDragLeave={() => setCompressionDragOver(false)}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      setCompressionDragOver(false)
+                      handleDocumentCompression(event.dataTransfer.files?.[0])
+                    }}
+                    className={`flex min-h-56 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 py-8 text-center transition-colors ${compressionDragOver ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 bg-gray-50 hover:border-indigo-300 hover:bg-indigo-50/40'}`}>
+                    <span className="rounded-full bg-white p-3 shadow-sm"><FileArchive className="h-7 w-7 text-indigo-500" /></span>
+                    <span className="mt-4 text-sm font-semibold text-gray-800">选择 PDF 或 PPTX</span>
+                    <span className="mt-1 text-xs leading-5 text-gray-400">也可以把一个文件拖到这里</span>
+                  </button>
+                  {compression.error && (
+                    <div role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> <span>{compression.error}</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="rounded-lg bg-white p-2 text-indigo-500 shadow-sm">
+                      {compression.kind === 'pptx' ? <Presentation className="h-5 w-5" /> : <FileText className="h-5 w-5" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-gray-800">{compression.file.name}</p>
+                      <p className="mt-0.5 text-xs text-gray-400">{compression.kind.toUpperCase()} · {formatBytes(compression.file.size)}</p>
+                    </div>
+                    {compression.processing ? (
+                      <button type="button" onClick={() => pdfTaskStore.cancelCompression()}
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100">
+                        取消压缩
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => pdfTaskStore.clearCompression()}
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100">
+                        更换文件
+                      </button>
+                    )}
+                  </div>
+
+                  {compression.processing && (
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center justify-between gap-3 text-xs text-gray-500">
+                        <span className="inline-flex min-w-0 items-center gap-1.5"><Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-500" /><span className="truncate">{compression.progress.stage || '正在压缩'}</span></span>
+                        <span>{Math.round(compression.progress.percent || 0)}%</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-gray-200">
+                        <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${Math.max(3, compression.progress.percent || 0)}%` }} />
+                      </div>
+                    </div>
+                  )}
+
+                  {compression.error && (
+                    <div role="alert" className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> <span>{compression.error}</span>
+                    </div>
+                  )}
+
+                  {compression.message && !compression.error && (
+                    <div role="status" className={`mt-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs leading-5 ${compression.result && compression.result.compressedSize >= compression.result.originalSize ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                      <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" /> <span>{compression.message}</span>
+                    </div>
+                  )}
+
+                  {compression.result && !compression.processing && (
+                    <div className="mt-4 rounded-xl border border-indigo-100 bg-white p-4">
+                      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center">
+                        <div>
+                          <p className="text-[11px] text-gray-400">压缩前</p>
+                          <p className="mt-1 text-base font-semibold text-gray-800">{formatBytes(compression.result.originalSize)}</p>
+                        </div>
+                        <span className="text-sm text-gray-300">→</span>
+                        <div>
+                          <p className="text-[11px] text-gray-400">压缩后</p>
+                          <p className="mt-1 text-base font-semibold text-indigo-700">{formatBytes(compression.result.compressedSize)}</p>
+                        </div>
+                      </div>
+                      {compression.kind === 'pptx' && (
+                        <p className="mt-3 text-center text-[11px] text-gray-500">发现 {compression.result.imageCount} 张可处理图片，压缩了其中 {compression.result.changedImageCount} 张</p>
+                      )}
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        <button type="button" onClick={handleCompressedDownload}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+                          <Download className="h-4 w-4" /> 下载压缩文件
+                        </button>
+                        <button type="button" onClick={() => handleDocumentCompression(compression.file)}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+                          按当前强度重新压缩
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-2 text-[11px] leading-5 text-gray-500 md:grid-cols-2">
+            <p className="rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2"><strong className="text-amber-700">PDF：</strong>通过把每页重新生成清晰图片来减小体积，适合扫描件；压缩版不再保留可搜索文字、链接、表单和批注。</p>
+            <p className="rounded-lg border border-violet-100 bg-violet-50/70 px-3 py-2"><strong className="text-violet-700">PPTX：</strong>只压缩演示文稿内的 JPG/PNG，页面、文字、动画关系和图片对象保持可编辑；音视频不会压缩。</p>
+          </div>
         </section>
 
         <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -864,7 +1037,8 @@ export default function PdfExtractor({ navigate }) {
           </>
         )}
 
-        <section className="grid gap-3 sm:grid-cols-3">
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <InfoCard title="文档压缩范围" text="PDF 通过逐页重建图片版减小体积；PPTX 只压缩 JPG/PNG，保留页面结构、可编辑文字、动画关系和图片对象。" />
           <InfoCard title="文字识别范围" text="优先读取 PDF 自带文字层，也可用本地中英文 OCR 识别扫描页、照片和批量图片；无文字页默认隐藏，可按需显示并手工补充。" />
           <InfoCard title="图片识别范围" text="提取 PDF 内嵌栅格图片；大面积统一底色会智能保留最大主图并忽略孤立小装饰，且可随时切回原图。" />
           <InfoCard title="PPT 可编辑范围" text="普通导出保留独立图片对象；模板导出还能把 OCR 结果写入真正的文本框。模板中的背景、Logo、母版和其他页面会继续保留。" />
@@ -881,8 +1055,8 @@ function ToolHeader({ navigate }) {
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 sm:gap-4">
         <img src="/logo.png" alt="TU Scale" className="h-16 w-auto shrink-0 sm:h-18" />
         <div className="mr-auto flex min-w-0 flex-col justify-center">
-          <h1 className="truncate text-lg font-bold leading-tight tracking-tight sm:text-xl" style={{ color: '#8040f0' }}>TU Scale 本地图片工具箱-PDF / OCR 提取</h1>
-          <p className="mt-2 text-xs font-semibold leading-none text-gray-400 sm:text-sm">PDF 与批量图片本地识别，不上传服务器</p>
+          <h1 className="truncate text-lg font-bold leading-tight tracking-tight sm:text-xl" style={{ color: '#8040f0' }}>TU Scale 本地图片工具箱-PDF / PPT</h1>
+          <p className="mt-2 text-xs font-semibold leading-none text-gray-400 sm:text-sm">文档压缩、PDF 提取与批量图片识别，全部本地处理</p>
         </div>
         <nav className="order-2 flex w-full items-center gap-1 overflow-x-auto sm:order-none sm:w-auto">
           {TOOL_NAV.map(item => (
