@@ -55,6 +55,7 @@ const FORMAT_OPTIONS = [
  let batchIdCounter = 0
  const MAX_BATCH = 50
  const STORAGE_KEY = 'tuscale_settings'
+const INTERFACE_MODE_KEY = 'tuscale_interface_mode'
 const IMAGE_EXTS = ['.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','.svg','.ico','.avif','.heic','.heif']
 const WARN_OUTPUT_PIXELS = 45_000_000
 const MAX_OUTPUT_PIXELS = 80_000_000
@@ -193,7 +194,24 @@ const PAGE_META = {
 
  function App() {
   const [route, setRoute] = useState(() => window.location.pathname)
+  const [interfaceMode, setInterfaceMode] = useState(() => {
+    try {
+      const savedMode = localStorage.getItem(INTERFACE_MODE_KEY)
+      if (savedMode === 'basic' || savedMode === 'professional') return savedMode
+      return localStorage.getItem(STORAGE_KEY) ? 'professional' : 'basic'
+    } catch {
+      return 'basic'
+    }
+  })
   const pdfTask = useSyncExternalStore(pdfTaskStore.subscribe, pdfTaskStore.getSnapshot, pdfTaskStore.getSnapshot)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(INTERFACE_MODE_KEY, interfaceMode)
+    } catch {
+      // The interface still works when browser storage is unavailable.
+    }
+  }, [interfaceMode])
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path)
@@ -2645,6 +2663,10 @@ const zipDownloadLockRef = useRef(false)
           </div>
         )}
 
+        <div className="flex justify-end">
+          <InterfaceModeSwitch value={interfaceMode} onChange={setInterfaceMode} />
+        </div>
+
         <div className="flex md:hidden items-center gap-1 overflow-x-auto">
           {TOOL_NAV.map(item => (
             <button key={item.id} onClick={() => navigate(item.path)}
@@ -2860,7 +2882,18 @@ const zipDownloadLockRef = useRef(false)
         )}
 
         {/* ==================== 裁切适配 ==================== */}
-        <section className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+        {interfaceMode === 'basic' && !cropEnabled && (
+          <button type="button" onClick={() => {
+            setCropEnabled(true)
+            trackUpscaleFeature('crop')
+            if (origDims) setCropRect(getDefaultCropRect(origDims.w, origDims.h, cropPreset))
+            resetResultState()
+          }} className="flex w-full items-center justify-between rounded-xl border border-gray-200 bg-white px-5 py-4 text-left text-sm font-semibold text-gray-700 hover:border-indigo-200 hover:bg-indigo-50/30">
+            <span className="inline-flex items-center gap-2"><Crop className="h-4 w-4 text-indigo-500" />需要裁切图片？</span>
+            <span className="text-xs font-medium text-indigo-600">打开裁切</span>
+          </button>
+        )}
+        {(interfaceMode === 'professional' || cropEnabled) && <section className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="font-semibold text-gray-800 text-sm flex items-center gap-2">
@@ -2940,10 +2973,11 @@ const zipDownloadLockRef = useRef(false)
               )}
             </>
           )}
-        </section>
+        </section>}
 
         {/* ==================== 控制区 ==================== */}
         <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+          {interfaceMode === 'professional' ? <>
           {/* 模式切换 */}
           <div className="flex gap-2">
             {[{ value: 'scale', label: '\u6309\u500d\u6570\u653e\u5927', icon: ZoomIn },
@@ -3061,6 +3095,50 @@ const zipDownloadLockRef = useRef(false)
               )}
             </>
           )}
+          </> : (
+            <section className="space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-800">选择放大程度</h2>
+                <p className="mt-1 text-xs leading-5 text-gray-400">推荐从 2 倍开始，原图较小时可以选择 4 倍。</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: 1, label: '保持尺寸', note: '只增强画质' },
+                  { value: 2, label: '放大 2 倍', note: '日常推荐' },
+                  { value: 4, label: '放大 4 倍', note: '适合小图' },
+                ].map(option => (
+                  <button key={option.value} type="button" onClick={() => { setScaleMode('scale'); setScale(option.value) }}
+                    className={`rounded-xl border px-3 py-3 text-left ${scaleMode === 'scale' && scale === option.value ? 'border-indigo-400 bg-indigo-50 text-indigo-800' : 'border-gray-200 text-gray-600 hover:border-indigo-200'}`}>
+                    <span className="block text-sm font-semibold">{option.label}</span>
+                    <span className="mt-1 block text-[11px] text-gray-400">{option.note}</span>
+                  </button>
+                ))}
+              </div>
+              {!batchMode && expectedOutput && (
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-700">
+                  预计导出 <strong>{expectedOutput.w}&times;{expectedOutput.h}px</strong>
+                </div>
+              )}
+              <div>
+                <h2 className="text-sm font-semibold text-gray-800">处理方式</h2>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setAiUpscale(false)}
+                    className={`rounded-xl border px-4 py-3 text-left ${!aiUpscale ? 'border-indigo-400 bg-indigo-50 text-indigo-800' : 'border-gray-200 text-gray-600 hover:border-indigo-200'}`}>
+                    <span className="block text-sm font-semibold">快速处理</span>
+                    <span className="mt-1 block text-[11px] text-gray-400">适合大多数清晰图片</span>
+                  </button>
+                  <button type="button" onClick={() => {
+                    setAiUpscale(true)
+                    trackEvent('ai_enabled')
+                    trackUpscaleFeature('ai_upscale')
+                  }} className={`rounded-xl border px-4 py-3 text-left ${aiUpscale ? 'border-indigo-400 bg-indigo-50 text-indigo-800' : 'border-gray-200 text-gray-600 hover:border-indigo-200'}`}>
+                    <span className="block text-sm font-semibold">AI 清晰</span>
+                    <span className="mt-1 block text-[11px] text-gray-400">处理更慢，适合插画和头像</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* 内容类型 */}
           <section className="rounded-xl border border-gray-200 bg-white p-4">
@@ -3110,7 +3188,7 @@ const zipDownloadLockRef = useRef(false)
                   ))}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              {interfaceMode === 'professional' && <div className="flex items-center gap-3">
                 <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                   <input type="checkbox" checked={preserveOriginalFileName}
                     onChange={(e) => setPreserveOriginalFileName(e.target.checked)}
@@ -3127,10 +3205,10 @@ const zipDownloadLockRef = useRef(false)
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100 transition-colors">
                   {'\uD83D\uDD0D'}{'\u667a\u80fd\u68c0\u6d4b'}
                 </button>
-              </div>
+              </div>}
             </div>
 
-            <div className="bg-gray-50/60 border border-gray-100 rounded-xl p-4 space-y-3">
+            {interfaceMode === 'professional' && <div className="bg-gray-50/60 border border-gray-100 rounded-xl p-4 space-y-3">
               <div>
                 <div className='text-xs font-medium text-gray-500 mb-2'>{'\u9510\u5316'}</div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5">
@@ -3399,7 +3477,7 @@ const zipDownloadLockRef = useRef(false)
                     )}
                   </div>
                 )}
-              </div>
+              </div>}
           </div>
           {/* 提交按钮 */}
           {!batchMode && (
@@ -3672,6 +3750,7 @@ const zipDownloadLockRef = useRef(false)
           </div>
         </section>
 
+        {interfaceMode === 'professional' && <>
         {/* 说明 */}
         <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-xs text-blue-800 leading-relaxed">
           <ul className="list-disc list-inside space-y-1">
@@ -3732,6 +3811,7 @@ const zipDownloadLockRef = useRef(false)
             </div>
           </div>
         </section>
+        </>}
       </main>
 
       <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-100 mt-8">TU Scale&middot;{'\u56fe\u7247\u653e\u5927\u5de5\u5177'} &middot; 浏览器本地处理</footer>
@@ -3840,6 +3920,22 @@ function PageLoading({ label }) {
         <Loader2 className="mx-auto h-6 w-6 animate-spin text-indigo-500" />
         <p className="mt-3 text-sm font-semibold text-gray-700">{label}</p>
       </div>
+    </div>
+  )
+}
+
+function InterfaceModeSwitch({ value, onChange }) {
+  return (
+    <div className="inline-flex rounded-xl border border-gray-200 bg-white p-1 shadow-sm" role="group" aria-label="界面模式">
+      {[
+        { id: 'basic', label: '基础模式' },
+        { id: 'professional', label: '专业模式' },
+      ].map(option => (
+        <button key={option.id} type="button" aria-pressed={value === option.id} onClick={() => onChange(option.id)}
+          className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${value === option.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>
+          {option.label}
+        </button>
+      ))}
     </div>
   )
 }
