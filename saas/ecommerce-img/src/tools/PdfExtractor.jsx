@@ -571,6 +571,11 @@ export default function PdfExtractor({ navigate }) {
                       {compression.kind === 'pptx' && (
                         <p className="mt-3 text-center text-[11px] text-gray-500">发现 {compression.result.imageCount} 张可处理图片，压缩了其中 {compression.result.changedImageCount} 张</p>
                       )}
+                      {compression.kind === 'pdf' && (
+                        <p className="mt-3 text-center text-[11px] text-gray-500">{compression.result.textPreserved
+                          ? `已保留可搜索文字，压缩了 ${compression.result.changedImageCount} 张内嵌图片`
+                          : '原文件没有文字层，已按扫描件压缩'}</p>
+                      )}
                       <div className="mt-4 grid gap-2 sm:grid-cols-2">
                         <button type="button" onClick={handleCompressedDownload}
                           className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
@@ -589,7 +594,7 @@ export default function PdfExtractor({ navigate }) {
           </div>
 
           <div className="mt-4 grid gap-2 text-[11px] leading-5 text-gray-500 md:grid-cols-2">
-            <p className="rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2"><strong className="text-amber-700">PDF：</strong>通过把每页重新生成清晰图片来减小体积，适合扫描件；压缩版不再保留可搜索文字、链接、表单和批注。</p>
+            <p className="rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2"><strong className="text-amber-700">PDF：</strong>优先只压缩内嵌照片，保留原有文字层和页面结构；纯扫描件才会逐页压缩。暂不支持安全保留文字的文件会停止处理，不会生成丢字版本。</p>
             <p className="rounded-lg border border-violet-100 bg-violet-50/70 px-3 py-2"><strong className="text-violet-700">PPTX：</strong>只压缩演示文稿内的 JPG/PNG，页面、文字、动画关系和图片对象保持可编辑；音视频不会压缩。</p>
           </div>
         </section>
@@ -1038,7 +1043,7 @@ export default function PdfExtractor({ navigate }) {
         )}
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <InfoCard title="文档压缩范围" text="PDF 通过逐页重建图片版减小体积；PPTX 只压缩 JPG/PNG，保留页面结构、可编辑文字、动画关系和图片对象。" />
+          <InfoCard title="文档压缩范围" text="PDF 优先保留文字和页面结构，仅压缩内嵌照片；无文字的扫描件可逐页压缩。PPTX 只压缩 JPG/PNG，保留页面结构、可编辑文字、动画关系和图片对象。" />
           <InfoCard title="文字识别范围" text="优先读取 PDF 自带文字层，也可用本地中英文 OCR 识别扫描页、照片和批量图片；无文字页默认隐藏，可按需显示并手工补充。" />
           <InfoCard title="图片识别范围" text="提取 PDF 内嵌栅格图片；大面积统一底色会智能保留最大主图并忽略孤立小装饰，且可随时切回原图。" />
           <InfoCard title="PPT 可编辑范围" text="普通导出保留独立图片对象；模板导出还能把 OCR 结果写入真正的文本框。模板中的背景、Logo、母版和其他页面会继续保留。" />

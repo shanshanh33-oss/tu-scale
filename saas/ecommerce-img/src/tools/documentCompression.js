@@ -34,6 +34,11 @@ const loadPdfJs = async () => {
   return loadCompressionPdfJs()
 }
 
+const loadTextSafeCompressor = async () => {
+  const { compressPdfImagesKeepingText } = await import('./pdfImageCompression')
+  return compressPdfImagesKeepingText
+}
+
 const assertNotAborted = (signal, message = '文档压缩已取消') => {
   if (signal?.aborted) throw new DOMException(message, 'AbortError')
 }
@@ -132,7 +137,7 @@ export const buildRasterPdf = (pages) => {
   return new Blob(parts, { type: PDF_MIME })
 }
 
-export const compressPdfFile = async (file, {
+const compressRasterPdfFile = async (file, {
   presetId = 'balanced',
   signal,
   onProgress,
@@ -226,6 +231,69 @@ export const compressPdfFile = async (file, {
       // Cleanup failure must not hide the compression result or original error.
     }
   }
+}
+
+const pdfHasDrawnText = async (file, signal) => {
+  const pdfjs = await loadPdfJs()
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(await file.arrayBuffer()),
+    isEvalSupported: false,
+    useSystemFonts: true,
+  })
+  let documentProxy = null
+  try {
+    documentProxy = await loadingTask.promise
+    const textOperators = new Set([
+      pdfjs.OPS.showText,
+      pdfjs.OPS.showSpacedText,
+      pdfjs.OPS.nextLineShowText,
+      pdfjs.OPS.nextLineSetSpacingShowText,
+    ])
+    for (let pageNumber = 1; pageNumber <= documentProxy.numPages; pageNumber += 1) {
+      assertNotAborted(signal)
+      const page = await documentProxy.getPage(pageNumber)
+      const operators = await page.getOperatorList()
+      const containsText = operators.fnArray.some(operator => textOperators.has(operator))
+      page.cleanup()
+      if (containsText) return true
+    }
+    return false
+  } finally {
+    if (documentProxy) await documentProxy.destroy()
+    else await loadingTask.destroy()
+  }
+}
+
+export const compressPdfFile = async (file, options = {}) => {
+  if (getDocumentCompressionKind(file) !== 'pdf') throw new Error('请选择 PDF 文件')
+  const { presetId = 'balanced', signal, onProgress } = options
+  const preset = getCompressionPreset(presetId)
+  let preservationError
+  try {
+    onProgress?.({ completed: 0, total: 0, percent: 1, stage: '正在保留文字并压缩图片' })
+    const compressPreservingText = await loadTextSafeCompressor()
+    const result = await compressPreservingText(file, {
+      jpegQuality: preset.pdf.jpegQuality,
+      signal,
+      onProgress,
+    })
+    return {
+      ...result,
+      kind: 'pdf',
+      textPreserved: true,
+      originalSize: file.size || 0,
+      compressedSize: result.blob.size,
+      fileName: getCompressedDocumentName(file.name, 'pdf'),
+    }
+  } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError') throw error
+    preservationError = error
+  }
+
+  onProgress?.({ completed: 0, total: 0, percent: 2, stage: '正在确认是否为纯扫描 PDF' })
+  if (await pdfHasDrawnText(file, signal)) throw preservationError
+  const result = await compressRasterPdfFile(file, options)
+  return { ...result, textPreserved: false }
 }
 
 export const getPptxMediaKind = (path) => {

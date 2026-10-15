@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import JSZip from 'jszip'
+import sharp from 'sharp'
+import { File } from 'node:buffer'
 import {
   buildRasterPdf,
   compressPptxFile,
@@ -9,6 +11,7 @@ import {
   getDocumentCompressionKind,
   getPptxMediaKind,
 } from '../src/tools/documentCompression.js'
+import { compressPdfImagesKeepingText } from '../src/tools/pdfImageCompression.js'
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
@@ -56,6 +59,79 @@ test('PDF 图片页写入器生成字节偏移正确的多页 PDF', async () => 
     const objectHeader = new TextDecoder().decode(bytes.slice(objectOffset, objectOffset + 16))
     assert.ok(objectHeader.startsWith(`${objectId} 0 obj`), `对象 ${objectId} 的 xref 偏移应正确`)
   }
+})
+
+const buildTextAndPhotoPdf = async () => {
+  const width = 192
+  const height = 192
+  const pixels = Buffer.alloc(width * height * 3)
+  for (let index = 0; index < pixels.length; index += 1) pixels[index] = (index * 37 + (index >> 6)) % 256
+  const jpeg = await sharp(pixels, { raw: { width, height, channels: 3 } }).jpeg({ quality: 95 }).toBuffer()
+  const content = 'BT /F1 22 Tf 30 250 Td (Keep me searchable) Tj ET\nq 180 0 0 180 30 30 cm /Im0 Do Q\n'
+  const parts = []
+  const offsets = []
+  let size = 0
+  const add = (part) => {
+    const bytes = typeof part === 'string' ? new TextEncoder().encode(part) : part
+    parts.push(bytes)
+    size += bytes.byteLength
+  }
+  const object = (id, body) => {
+    offsets[id] = size
+    add(`${id} 0 obj\n`)
+    body.forEach(add)
+    add('\nendobj\n')
+  }
+  add('%PDF-1.4\n')
+  object(1, ['<< /Type /Catalog /Pages 2 0 R >>'])
+  object(2, ['<< /Type /Pages /Count 1 /Kids [3 0 R] >>'])
+  object(3, ['<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << /Font << /F1 4 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 6 0 R >>'])
+  object(4, ['<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'])
+  object(5, [`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`, jpeg, '\nendstream'])
+  object(6, [`<< /Length ${content.length} >>\nstream\n${content}endstream`])
+  const xref = size
+  add('xref\n0 7\n0000000000 65535 f \n')
+  for (let id = 1; id <= 6; id += 1) add(`${String(offsets[id]).padStart(10, '0')} 00000 n \n`)
+  add(`trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`)
+  return new File(parts, 'text-photo.pdf', { type: 'application/pdf' })
+}
+
+const extractFirstPageText = async (blob) => {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const loadingTask = getDocument({ data: new Uint8Array(await blob.arrayBuffer()), useSystemFonts: true })
+  const documentProxy = await loadingTask.promise
+  try {
+    const page = await documentProxy.getPage(1)
+    const content = await page.getTextContent()
+    return { pageCount: documentProxy.numPages, text: content.items.map(item => item.str).join('') }
+  } finally {
+    await documentProxy.destroy()
+  }
+}
+
+test('PDF 图片压缩保留原文字层与页数，不再把整页转为图片', async () => {
+  const source = await buildTextAndPhotoPdf()
+  const result = await compressPdfImagesKeepingText(source, {
+    jpegQuality: 0.5,
+    recompressJpeg: async bytes => new Uint8Array(await sharp(bytes).jpeg({ quality: 50 }).toBuffer()),
+  })
+  const before = await extractFirstPageText(source)
+  const after = await extractFirstPageText(result.blob)
+
+  assert.equal(result.pageCount, 1)
+  assert.equal(result.imageCount, 1)
+  assert.equal(result.changedImageCount, 1)
+  assert.ok(result.blob.size < source.size)
+  assert.deepEqual(after, before)
+  assert.match(after.text, /Keep me searchable/)
+})
+
+test('照片无法缩小时不生成丢失文字的压缩版', async () => {
+  const source = await buildTextAndPhotoPdf()
+  await assert.rejects(
+    compressPdfImagesKeepingText(source, { recompressJpeg: async bytes => bytes }),
+    /未生成丢失文字的版本/,
+  )
 })
 
 test('PPTX 压缩只替换媒体图片并保留演示结构和其他资源', async () => {
