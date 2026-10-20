@@ -13,6 +13,16 @@ const createInitialCompression = () => ({
   message: '',
 })
 
+const createInitialConversion = () => ({
+  file: null,
+  format: 'jpeg',
+  processing: false,
+  progress: { completed: 0, total: 0, stage: '' },
+  result: null,
+  error: '',
+  message: '',
+})
+
 const createInitialSnapshot = () => ({
   file: null,
   sourceFiles: [],
@@ -25,6 +35,7 @@ const createInitialSnapshot = () => ({
   progress: INITIAL_PROGRESS,
   ocrProgress: INITIAL_OCR_PROGRESS,
   compression: createInitialCompression(),
+  conversion: createInitialConversion(),
   error: '',
   message: '',
 })
@@ -43,9 +54,11 @@ export const createPdfTaskStore = ({
   let activeController = null
   let activeOcrController = null
   let activeCompressionController = null
+  let activeConversionController = null
   let activeRunId = 0
   let activeOcrRunId = 0
   let activeCompressionRunId = 0
+  let activeConversionRunId = 0
   const listeners = new Set()
   const objectUrls = new Set()
 
@@ -132,10 +145,12 @@ export const createPdfTaskStore = ({
     activeOcrController = null
     clearObjectUrls()
     const compression = snapshot.compression
+    const conversion = snapshot.conversion
     snapshot = {
       ...createInitialSnapshot(),
       compression,
-      exporting: compression.processing ? `compress-${compression.kind}` : '',
+      conversion,
+      exporting: compression.processing ? `compress-${compression.kind}` : conversion.processing ? 'pdf-direct' : '',
     }
     listeners.forEach(listener => listener())
   }
@@ -143,6 +158,7 @@ export const createPdfTaskStore = ({
   const cancel = () => activeController?.abort()
   const cancelOcr = () => activeOcrController?.abort()
   const cancelCompression = () => activeCompressionController?.abort()
+  const cancelConversion = () => activeConversionController?.abort()
 
   const clearCompression = () => {
     activeCompressionRunId += 1
@@ -152,6 +168,87 @@ export const createPdfTaskStore = ({
       exporting: String(snapshot.exporting).startsWith('compress-') ? '' : snapshot.exporting,
       compression: createInitialCompression(),
     })
+  }
+
+  const clearConversion = () => {
+    activeConversionRunId += 1
+    activeConversionController?.abort()
+    activeConversionController = null
+    update({
+      exporting: snapshot.exporting === 'pdf-direct' ? '' : snapshot.exporting,
+      conversion: createInitialConversion(),
+    })
+  }
+
+  const startConversion = async (file, { format = 'jpeg', maxDimension = 3200 } = {}, convert) => {
+    if (!file || (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name || ''))) {
+      update({ conversion: { ...createInitialConversion(), error: '请选择 PDF 文件' } })
+      return null
+    }
+    if (snapshot.parsing || snapshot.ocrRunning || snapshot.exporting || snapshot.compression.processing) {
+      update({ conversion: { ...snapshot.conversion, error: '请等待当前任务完成后再转换 PDF', message: '' } })
+      return null
+    }
+    if (typeof convert !== 'function') {
+      update({ conversion: { ...snapshot.conversion, error: 'PDF 转换器未正确加载', message: '' } })
+      return null
+    }
+
+    activeConversionRunId += 1
+    const runId = activeConversionRunId
+    activeConversionController?.abort()
+    const controller = new AbortController()
+    activeConversionController = controller
+    update({
+      exporting: 'pdf-direct',
+      conversion: {
+        file,
+        format,
+        processing: true,
+        progress: { completed: 0, total: 0, stage: '正在打开 PDF' },
+        result: null,
+        error: '',
+        message: 'PDF 正在本地转换，可切换到 TU Scale 其他页面',
+      },
+    })
+
+    try {
+      const result = await convert(file, {
+        format,
+        maxDimension,
+        signal: controller.signal,
+        onProgress: progress => {
+          if (activeConversionRunId === runId) update({ conversion: { ...snapshot.conversion, progress } })
+        },
+      })
+      if (activeConversionRunId !== runId) return null
+      update({
+        exporting: '',
+        conversion: {
+          ...snapshot.conversion,
+          processing: false,
+          result,
+          error: '',
+          message: `转换完成：${result.pageCount} 页 PDF → ${result.pageCount} 页 PPT`,
+        },
+      })
+      return result
+    } catch (error) {
+      if (activeConversionRunId !== runId) return null
+      const cancelled = error?.name === 'AbortError'
+      update({
+        exporting: '',
+        conversion: {
+          ...snapshot.conversion,
+          processing: false,
+          error: cancelled ? '' : (error?.message || 'PDF 转 PPT 失败，请换一个文件重试'),
+          message: cancelled ? '已取消 PDF 转 PPT' : '',
+        },
+      })
+      return null
+    } finally {
+      if (activeConversionRunId === runId) activeConversionController = null
+    }
   }
 
   const startCompression = async (file, kind, presetId, runCompression) => {
@@ -246,8 +343,8 @@ export const createPdfTaskStore = ({
       update({ error: 'PDF 解析器未正确加载', message: '' })
       return null
     }
-    if (snapshot.compression.processing) {
-      update({ error: '请等待文档压缩完成后再解析 PDF', message: '' })
+    if (snapshot.compression.processing || snapshot.conversion.processing) {
+      update({ error: '请等待文档任务完成后再解析 PDF', message: '' })
       return null
     }
 
@@ -438,8 +535,8 @@ export const createPdfTaskStore = ({
       update({ error: 'OCR 识别器未正确加载', message: '' })
       return null
     }
-    if (snapshot.compression.processing) {
-      update({ error: '请等待文档压缩完成后再识别图片', message: '' })
+    if (snapshot.compression.processing || snapshot.conversion.processing) {
+      update({ error: '请等待文档任务完成后再识别图片', message: '' })
       return null
     }
 
@@ -566,13 +663,16 @@ export const createPdfTaskStore = ({
   return {
     cancel,
     cancelCompression,
+    cancelConversion,
     cancelOcr,
     clearCompression,
+    clearConversion,
     getSnapshot,
     reset,
     setSelectedIds,
     start,
     startCompression,
+    startConversion,
     startImageOcr,
     startOcr,
     subscribe,

@@ -27,6 +27,7 @@ import {
   getDocumentCompressionKind,
 } from './documentCompression'
 import { downloadBlob, formatBytes, trackEvent } from './shared'
+import { convertPdfDirectlyToPptx } from './pdfDirectPptx'
 import {
   MAX_EXTRACTED_IMAGES,
   convertExtractedImage,
@@ -73,6 +74,7 @@ export default function PdfExtractor({ navigate }) {
   const folderInputRef = useRef(null)
   const templateInputRef = useRef(null)
   const compressionInputRef = useRef(null)
+  const directPptInputRef = useRef(null)
   const task = useSyncExternalStore(pdfTaskStore.subscribe, pdfTaskStore.getSnapshot, pdfTaskStore.getSnapshot)
   const {
     file,
@@ -85,6 +87,7 @@ export default function PdfExtractor({ navigate }) {
     progress,
     ocrProgress,
     compression,
+    conversion,
     error,
     message,
   } = task
@@ -94,6 +97,7 @@ export default function PdfExtractor({ navigate }) {
   })
   const [dragOver, setDragOver] = useState(false)
   const [compressionDragOver, setCompressionDragOver] = useState(false)
+  const [directPptDragOver, setDirectPptDragOver] = useState(false)
   const [showSmallImages, setShowSmallImages] = useState(false)
   const [showEmptyTextPages, setShowEmptyTextPages] = useState(false)
   const [ratioId, setRatioId] = useState('original')
@@ -109,6 +113,7 @@ export default function PdfExtractor({ navigate }) {
   const [templateLoading, setTemplateLoading] = useState(false)
   const [includeTemplateText, setIncludeTemplateText] = useState(true)
   const [compressionPreset, setCompressionPreset] = useState('balanced')
+  const [directPptFormat, setDirectPptFormat] = useState('jpeg')
 
   const setSelectedIds = useCallback(nextValue => pdfTaskStore.setSelectedIds(nextValue), [])
   const setExporting = useCallback(value => pdfTaskStore.update({ exporting: value }), [])
@@ -177,6 +182,21 @@ export default function PdfExtractor({ navigate }) {
     if (!compression.result?.blob) return
     downloadBlob(compression.result.blob, compression.result.fileName)
   }, [compression.result])
+
+  const handleDirectPptConversion = useCallback(async (nextFile) => {
+    if (!nextFile) return
+    const converted = await pdfTaskStore.startConversion(
+      nextFile,
+      { format: directPptFormat, maxDimension: 3200 },
+      convertPdfDirectlyToPptx,
+    )
+    if (converted) trackEvent('pdf_export_success')
+  }, [directPptFormat])
+
+  const handleDirectPptDownload = useCallback(() => {
+    if (!conversion.result?.blob) return
+    downloadBlob(conversion.result.blob, `${sanitizePdfName(conversion.file?.name)}_逐页转换.pptx`)
+  }, [conversion.file?.name, conversion.result])
 
   const resetResult = useCallback(() => {
     pdfTaskStore.reset()
@@ -446,6 +466,112 @@ export default function PdfExtractor({ navigate }) {
         <section className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3">
           <p className="text-sm font-semibold text-indigo-800">PDF、PPTX 与图片都在浏览器本地处理，文件不会上传服务器</p>
           <p className="mt-1 text-xs leading-5 text-indigo-600">任务可在切换 TU Scale 页面或浏览器标签后继续；如果浏览器冻结、关闭或刷新此标签页，任务会暂停或结束。</p>
+        </section>
+
+        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight">PDF 直接转 PPT</h2>
+              <p className="mt-1 text-sm leading-6 text-gray-500">无需先提取图片，一页 PDF 生成一页 PPT，按原页面比例保留排版。</p>
+            </div>
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">本地处理</span>
+          </div>
+
+          <input ref={directPptInputRef} type="file" accept="application/pdf,.pdf" className="hidden"
+            onChange={(event) => {
+              const nextFile = event.target.files?.[0]
+              event.target.value = ''
+              handleDirectPptConversion(nextFile)
+            }} />
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <SettingsSection title="页面画质">
+              <div className="space-y-2">
+                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-xs leading-5 text-gray-700">
+                  <input type="radio" name="pdf-direct-format" checked={directPptFormat === 'jpeg'}
+                    disabled={conversion.processing} onChange={() => setDirectPptFormat('jpeg')}
+                    className="mt-0.5 h-4 w-4 border-gray-300 text-indigo-600" />
+                  <span><strong className="block font-semibold">高清（推荐）</strong>约 3200 像素长边，兼顾清晰度和文件体积</span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-xs leading-5 text-gray-700">
+                  <input type="radio" name="pdf-direct-format" checked={directPptFormat === 'png'}
+                    disabled={conversion.processing} onChange={() => setDirectPptFormat('png')}
+                    className="mt-0.5 h-4 w-4 border-gray-300 text-indigo-600" />
+                  <span><strong className="block font-semibold">无损页面图</strong>文字边缘更利落，PPT 文件可能明显增大</span>
+                </label>
+              </div>
+              <p className="mt-3 text-[11px] leading-5 text-gray-500">混合页面尺寸的 PDF 会以第一页比例作为 PPT 页面尺寸，其余页面完整居中显示。</p>
+            </SettingsSection>
+
+            <div className="min-w-0">
+              {!conversion.file ? (
+                <div>
+                  <button type="button" disabled={busy} onClick={() => directPptInputRef.current?.click()}
+                    onDragOver={(event) => { event.preventDefault(); setDirectPptDragOver(true) }}
+                    onDragLeave={() => setDirectPptDragOver(false)}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      setDirectPptDragOver(false)
+                      if (!busy) handleDirectPptConversion(event.dataTransfer.files?.[0])
+                    }}
+                    className={`flex min-h-44 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 py-7 text-center transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${directPptDragOver ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 bg-gray-50 hover:border-indigo-300 hover:bg-indigo-50/40'}`}>
+                    <span className="rounded-full bg-white p-3 shadow-sm"><Presentation className="h-7 w-7 text-indigo-500" /></span>
+                    <span className="mt-4 text-sm font-semibold text-gray-800">上传 PDF 并开始转换</span>
+                    <span className="mt-1 text-xs leading-5 text-gray-400">也可拖入 PDF；不设固定页数上限，实际取决于浏览器内存</span>
+                  </button>
+                  {file && sourceType === 'pdf' && !busy && (
+                    <button type="button" onClick={() => handleDirectPptConversion(file)}
+                      className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+                      <Presentation className="h-4 w-4" /> 将下方已上传的 PDF 直接转 PPT
+                    </button>
+                  )}
+                  {conversion.error && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{conversion.error}</p>}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="rounded-lg bg-white p-2 text-indigo-500 shadow-sm"><FileText className="h-5 w-5" /></span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-gray-800">{conversion.file.name}</p>
+                      <p className="mt-0.5 text-xs text-gray-400">{formatBytes(conversion.file.size)}</p>
+                    </div>
+                    {conversion.processing ? (
+                      <button type="button" onClick={() => pdfTaskStore.cancelConversion()}
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100">取消转换</button>
+                    ) : (
+                      <button type="button" onClick={() => pdfTaskStore.clearConversion()}
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100">更换文件</button>
+                    )}
+                  </div>
+                  {conversion.processing && (
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs text-gray-500">
+                        <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />{conversion.progress.stage || '正在转换'}</span>
+                        <span>{conversion.progress.total ? `${conversion.progress.completed}/${conversion.progress.total} 页` : '准备中'}</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-gray-200">
+                        <div className="h-full bg-indigo-500 transition-all" style={{ width: `${conversion.progress.total ? Math.max(3, (conversion.progress.completed / conversion.progress.total) * 100) : 3}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {conversion.error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{conversion.error}</p>}
+                  {conversion.message && !conversion.error && <p role="status" className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{conversion.message}</p>}
+                  {conversion.result && !conversion.processing && (
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-white p-3">
+                      <span className="text-xs text-gray-600">{conversion.result.pageCount} 页 PPT · {formatBytes(conversion.result.fileSize)}</span>
+                      <button type="button" onClick={handleDirectPptDownload}
+                        className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">
+                        <Download className="h-4 w-4" /> 下载 PPTX
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <p className="mt-4 rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2 text-[11px] leading-5 text-amber-800">
+            保真模式会把每一页做成独立的 PPT 图片对象，可移动、裁切和替换；页内文字与照片不会自动拆成单独对象。需要分别编辑图文时，请使用下方“PDF / 批量图片与文字提取”功能。
+          </p>
         </section>
 
         <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">

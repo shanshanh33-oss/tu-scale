@@ -4,6 +4,43 @@ import { createPdfTaskStore } from '../src/tools/pdfTaskStore.js'
 
 const pdfFile = { name: '后台任务.pdf', type: 'application/pdf' }
 
+test('PDF 直接转 PPT 在切换页面后继续并保留下载结果', async () => {
+  const store = createPdfTaskStore()
+  let finishConversion
+  let conversionSignal
+  const convert = (_file, { signal, onProgress }) => new Promise(resolve => {
+    conversionSignal = signal
+    onProgress({ completed: 2, total: 10, stage: '正在生成第 2/10 页 PPT' })
+    finishConversion = () => resolve({ blob: new Blob(['pptx']), pageCount: 10, fileSize: 4 })
+  })
+
+  const unsubscribe = store.subscribe(() => {})
+  const pending = store.startConversion(pdfFile, { format: 'png' }, convert)
+  unsubscribe()
+  store.reset()
+  assert.equal(conversionSignal.aborted, false)
+  assert.equal(store.getSnapshot().conversion.processing, true)
+  assert.equal(store.getSnapshot().conversion.progress.completed, 2)
+
+  finishConversion()
+  const result = await pending
+  assert.equal(result.pageCount, 10)
+  assert.equal(store.getSnapshot().conversion.processing, false)
+  assert.equal(store.getSnapshot().conversion.result.blob.size, 4)
+  assert.equal(store.getSnapshot().exporting, '')
+})
+
+test('PDF 直接转 PPT 只在主动取消时中止', async () => {
+  const store = createPdfTaskStore()
+  const pending = store.startConversion(pdfFile, {}, (_file, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true })
+  }))
+  store.cancelConversion()
+  assert.equal(await pending, null)
+  assert.equal(store.getSnapshot().conversion.processing, false)
+  assert.equal(store.getSnapshot().conversion.message, '已取消 PDF 转 PPT')
+})
+
 test('PDF 任务在页面订阅取消后仍会继续并保留结果', async () => {
   let finishParsing
   let parsingSignal
