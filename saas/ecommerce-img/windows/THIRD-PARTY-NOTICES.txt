@@ -1,0 +1,20 @@
+TU Scale Windows package - third-party components
+=================================================
+
+This package contains open-source runtimes, libraries, and model files. Full
+license texts shipped by the projects are retained in the package wherever
+available, including Python wheel *.dist-info license directories.
+
+- Node.js runtime: https://nodejs.org/ — Node.js license (runtime/node/LICENSE)
+- Python embedded runtime: https://python.org/ — PSF license (runtime/python/LICENSE.txt)
+- NumPy: https://numpy.org/ — BSD and bundled third-party notices
+- ONNX Runtime: https://onnxruntime.ai/ — MIT License
+- Pillow: https://python-pillow.org/ — HPND License
+- SCUNet: https://github.com/cszn/SCUNet — Apache-2.0 license text is included
+- DRUNet / DPIR: https://github.com/cszn/DPIR — MIT license text is included
+- Browser waifu2x enhancement model: license text is included beside the model
+- MediaPipe Face Landmarker: https://developers.google.com/mediapipe
+- Tesseract.js and Tesseract language data: https://github.com/naptha/tesseract.js
+
+The web application bundle also contains the npm dependencies declared in the
+TU Scale package-lock.json. This package does not change their licenses.
