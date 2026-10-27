@@ -41,6 +41,7 @@ mkdir -p "$CACHE_DIR"
 cp -R "$APP_DIR/dist" "$PACKAGE_DIR/app/dist"
 cp "$SCRIPT_DIR/server/windows-static-server.cjs" "$PACKAGE_DIR/app/server/"
 cp "$SCRIPT_DIR/server/windows-denoise-server.cjs" "$PACKAGE_DIR/app/server/"
+cp "$SCRIPT_DIR/server/waifu2x-upscale.py" "$PACKAGE_DIR/app/server/"
 cp "$APP_DIR/server/scunet-denoise.py" "$PACKAGE_DIR/app/server/"
 cp "$APP_DIR/server/drunet-denoise.py" "$PACKAGE_DIR/app/server/"
 cp "$APP_DIR/server/denoise_detail.py" "$PACKAGE_DIR/app/server/"
@@ -93,6 +94,7 @@ python3 -c "from PIL import Image; image=Image.open(r'$APP_DIR/public/icon-512.p
 for required in \
   "$PACKAGE_DIR/app/dist/index.html" \
   "$PACKAGE_DIR/app/dist/models/waifu2x.onnx" \
+  "$PACKAGE_DIR/app/server/waifu2x-upscale.py" \
   "$PACKAGE_DIR/app/dist/models/waifu2x-enhance.onnx" \
   "$PACKAGE_DIR/app/dist/models/face_landmarker.task" \
   "$PACKAGE_DIR/app/dist/ocr/tessdata/chi_sim.traineddata.gz" \

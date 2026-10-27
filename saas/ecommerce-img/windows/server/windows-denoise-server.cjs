@@ -4,7 +4,7 @@ const fs = require('fs')
 const http = require('http')
 const os = require('os')
 const path = require('path')
-const { spawn } = require('child_process')
+const { spawn, spawnSync } = require('child_process')
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.TUSCALE_AI_PORT || 5179)
@@ -13,11 +13,27 @@ const SERVER_ROOT = path.resolve(process.env.TUSCALE_SERVER_DIR || __dirname)
 const PYTHON_PATH = process.env.TUSCALE_PYTHON || 'python.exe'
 const MAX_BODY_BYTES = 120 * 1024 * 1024
 const PROCESS_TIMEOUT_MS = 300_000
+const UPSCALE_TIMEOUT_MS = 900_000
 
 const ALLOWED_ORIGINS = new Set([
   'http://127.0.0.1:5174',
   'http://localhost:5174',
 ])
+
+function checkPythonRuntime() {
+  if (!fs.existsSync(PYTHON_PATH)) return false
+  const result = spawnSync(PYTHON_PATH, [
+    '-c',
+    'import numpy; import onnxruntime; from PIL import Image',
+  ], {
+    stdio: 'ignore',
+    windowsHide: true,
+    timeout: 15_000,
+  })
+  return !result.error && result.status === 0
+}
+
+const PYTHON_RUNTIME_AVAILABLE = checkPythonRuntime()
 
 const DENOISE_BACKENDS = {
   scunet: {
@@ -34,11 +50,23 @@ const DENOISE_BACKENDS = {
   },
 }
 
+const UPSCALE_BACKEND = {
+  script: path.join(SERVER_ROOT, 'waifu2x-upscale.py'),
+  model: path.join(APP_ROOT, 'dist', 'models', 'waifu2x.onnx'),
+  backend: 'waifu2x-onnx-cpu',
+}
+
 function getDenoiseAvailability() {
   return Object.fromEntries(Object.entries(DENOISE_BACKENDS).map(([key, config]) => [
     key,
-    fs.existsSync(PYTHON_PATH) && fs.existsSync(config.script) && fs.existsSync(config.model),
+    PYTHON_RUNTIME_AVAILABLE && fs.existsSync(config.script) && fs.existsSync(config.model),
   ]))
+}
+
+function getUpscaleAvailability() {
+  return PYTHON_RUNTIME_AVAILABLE
+    && fs.existsSync(UPSCALE_BACKEND.script)
+    && fs.existsSync(UPSCALE_BACKEND.model)
 }
 
 function setCors(request, response) {
@@ -134,6 +162,69 @@ function processDenoise(imageBase64, strength, requestedBackend, clarity) {
   })
 }
 
+function processUpscale(imageBase64, scale) {
+  return new Promise((resolve, reject) => {
+    if (!getUpscaleAvailability()) {
+      reject(new Error('waifu2x 本地放大模型不可用'))
+      return
+    }
+    if (Number(scale || 2) !== 2) {
+      reject(new Error('当前本地 AI 模型只支持 2 倍放大'))
+      return
+    }
+
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'tuscale-waifu2x-'))
+    const inputPath = path.join(temporaryDirectory, 'input.png')
+    const outputPath = path.join(temporaryDirectory, 'output.png')
+    let settled = false
+    const finish = callback => value => {
+      if (settled) return
+      settled = true
+      cleanupDirectory(temporaryDirectory)
+      callback(value)
+    }
+    const finishResolve = finish(resolve)
+    const finishReject = finish(reject)
+
+    try {
+      fs.writeFileSync(inputPath, Buffer.from(imageBase64, 'base64'))
+      const child = spawn(PYTHON_PATH, [
+        UPSCALE_BACKEND.script,
+        inputPath,
+        outputPath,
+        '--model', UPSCALE_BACKEND.model,
+      ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+      let standardError = ''
+      const timeout = setTimeout(() => child.kill(), UPSCALE_TIMEOUT_MS)
+      child.stderr.on('data', data => {
+        standardError += data.toString()
+        if (standardError.length > 8_000) standardError = standardError.slice(-8_000)
+      })
+      child.on('error', error => {
+        clearTimeout(timeout)
+        finishReject(error)
+      })
+      child.on('close', code => {
+        clearTimeout(timeout)
+        if (code !== 0 || !fs.existsSync(outputPath)) {
+          finishReject(new Error(`waifu2x failed (${code}): ${standardError.slice(-600)}`))
+          return
+        }
+        try {
+          finishResolve({
+            image: fs.readFileSync(outputPath).toString('base64'),
+            backend: UPSCALE_BACKEND.backend,
+          })
+        } catch (error) {
+          finishReject(error)
+        }
+      })
+    } catch (error) {
+      finishReject(error)
+    }
+  })
+}
+
 const server = http.createServer((request, response) => {
   setCors(request, response)
 
@@ -141,31 +232,30 @@ const server = http.createServer((request, response) => {
     sendJson(request, response, 200, {
       service: 'tuscale-denoise',
       status: 'ok',
+      pythonRuntime: PYTHON_RUNTIME_AVAILABLE,
       models: getDenoiseAvailability(),
+      upscale: getUpscaleAvailability(),
     })
-    return
-  }
-
-  // AI upscale is deliberately handled by the packaged browser ONNX model.
-  // Returning a non-2xx preflight makes the existing client select that stable
-  // WebGPU/WASM path while this service remains dedicated to SCUNet/DRUNet.
-  if (request.url === '/process') {
-    sendJson(request, response, 503, { error: 'Use packaged browser AI model' })
     return
   }
 
   if (request.method === 'OPTIONS') {
     const available = getDenoiseAvailability()
+    if (request.url === '/process' && getUpscaleAvailability()) {
+      response.writeHead(204)
+      response.end()
+      return
+    }
     if (request.url === '/denoise' && (available.scunet || available.drunet)) {
       response.writeHead(204)
       response.end()
       return
     }
-    sendJson(request, response, 503, { error: 'Local denoise models are unavailable' })
+    sendJson(request, response, 503, { error: 'Requested local AI model is unavailable' })
     return
   }
 
-  if (request.method !== 'POST' || request.url !== '/denoise') {
+  if (request.method !== 'POST' || (request.url !== '/denoise' && request.url !== '/process')) {
     sendJson(request, response, 404, { error: 'Not found' })
     return
   }
@@ -189,12 +279,14 @@ const server = http.createServer((request, response) => {
     try {
       const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       if (typeof payload.image !== 'string' || !payload.image) throw new Error('No image data')
-      const result = await processDenoise(
-        payload.image,
-        payload.strength,
-        payload.backend,
-        payload.clarity,
-      )
+      const result = request.url === '/process'
+        ? await processUpscale(payload.image, payload.scale)
+        : await processDenoise(
+          payload.image,
+          payload.strength,
+          payload.backend,
+          payload.clarity,
+        )
       sendJson(request, response, 200, result)
     } catch (error) {
       sendJson(request, response, 500, { error: error.message })

@@ -56,6 +56,15 @@ if (-not (Test-TUScaleDenoise)) {
   Set-Content -LiteralPath (Join-Path $stateDirectory 'denoise.pid') -Value $aiProcess.Id -Encoding ASCII
 }
 
+$aiReady = $false
+for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
+  if (Test-TUScaleDenoise) {
+    $aiReady = $true
+    break
+  }
+  Start-Sleep -Milliseconds 100
+}
+
 $webReady = $false
 for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
   if (Test-TUScaleWeb) {
@@ -67,6 +76,10 @@ for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
 
 if (-not $webReady) {
   throw "TU Scale web service did not start. See logs in: $logDirectory"
+}
+
+if (-not $aiReady) {
+  Write-Warning "TU Scale local AI service did not start; browser AI fallback will be used. See logs in: $logDirectory"
 }
 
 Start-Process $webUrl

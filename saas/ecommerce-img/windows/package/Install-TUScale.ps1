@@ -38,6 +38,7 @@ try {
     (Join-Path $stageRoot 'runtime\python\python.exe'),
     (Join-Path $stageRoot 'app\dist\index.html'),
     (Join-Path $stageRoot 'app\dist\models\waifu2x.onnx'),
+    (Join-Path $stageRoot 'app\server\waifu2x-upscale.py'),
     (Join-Path $stageRoot 'app\waifu2x\models-scunet\scunet_color_real_psnr.onnx'),
     (Join-Path $stageRoot 'app\waifu2x\models-drunet\drunet_color.onnx')
   )) {
