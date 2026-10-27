@@ -5,9 +5,9 @@
 当前包目标是 Windows 10/11 x64：
 
 - 使用内置 Node.js 运行只绑定 `127.0.0.1:5174` 的静态服务；
-- AI 放大与 1x 增强使用 `dist/models/` 中随包分发的浏览器 ONNX 模型；
-- 使用内置 Python、ONNX Runtime、SCUNet 和 DRUNet 运行 `127.0.0.1:5179` 本地降噪服务；
-- 5179 的 `/process` 明确返回 503，使现有前端自动选择浏览器 WebGPU/WASM AI 放大，不依赖 Vulkan 驱动；
+- AI 放大由 `127.0.0.1:5179` 使用内置 Python、ONNX Runtime 和 `dist/models/waifu2x.onnx` 在独立进程运行，避免长时间占用浏览器页面线程；
+- SCUNet 和 DRUNet 也由同一个仅限本机访问的 5179 服务运行；
+- 5179 服务不可用或模型缺失时，现有前端仍会自动选择浏览器 WebGPU/WASM AI 放大；1x AI 增强继续使用随包分发的浏览器 ONNX 模型；
 - OCR、MediaPipe、人脸和 PDF 资源均来自正常的 Vite `dist/` 构建。
 
 在 macOS/Linux 构建机上运行：

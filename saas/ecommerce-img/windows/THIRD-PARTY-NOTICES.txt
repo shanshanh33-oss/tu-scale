@@ -12,7 +12,7 @@ available, including Python wheel *.dist-info license directories.
 - Pillow: https://python-pillow.org/ — HPND License
 - SCUNet: https://github.com/cszn/SCUNet — Apache-2.0 license text is included
 - DRUNet / DPIR: https://github.com/cszn/DPIR — MIT license text is included
-- Browser waifu2x enhancement model: license text is included beside the model
+- Bundled waifu2x upscale and browser enhancement models: license text is included where provided by the model source
 - MediaPipe Face Landmarker: https://developers.google.com/mediapipe
 - Tesseract.js and Tesseract language data: https://github.com/naptha/tesseract.js
 
