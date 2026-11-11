@@ -2,6 +2,52 @@
 
 此目录只保存 Windows 打包源码；生成物写入 `release/`，不会提交到 Git。
 
+## 在 Windows 上继续源码开发
+
+建议使用 Windows 10/11 x64、Git 和 Node.js 22 LTS。克隆开发分支后运行：
+
+```powershell
+git clone -b codex/windows-dev git@github.com:shanshanh33-oss/tu-scale.git
+cd tu-scale\saas\ecommerce-img
+npm ci
+npm run lint
+npm test
+powershell -ExecutionPolicy Bypass -File .\windows\dev-start.ps1
+```
+
+`dev-start.ps1` 只绑定 `127.0.0.1:5174` 和 `127.0.0.1:5179`，日志保存在
+`%LOCALAPPDATA%\TU Scale Dev\logs`。停止由它启动的进程：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\dev-stop.ps1
+```
+
+如果只开发前端，可以加 `-SkipAi`。本地 AI 不可用时，页面会使用浏览器
+WebGPU/WASM 回退，不会把图片发送到第三方。
+
+如需调试 SCUNet、DRUNet 和独立进程 AI 放大，还需：
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\windows\requirements-windows.txt
+```
+
+并把经 SHA-256 校验的模型包解压到：
+
+```text
+waifu2x\models-scunet\scunet_color_real_psnr.onnx
+waifu2x\models-scunet\scunet_color_real_psnr.onnx.data
+waifu2x\models-drunet\drunet_color.onnx
+```
+
+解压后验证文件没有损坏或被替换：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\verify-models.ps1
+```
+
+不要从 Mac 复制 `node_modules`、`dist`、`.env.local`、`tmp-*.jsonl` 或生产密钥。
+
 当前包目标是 Windows 10/11 x64：
 
 - 使用内置 Node.js 运行只绑定 `127.0.0.1:5174` 的静态服务；

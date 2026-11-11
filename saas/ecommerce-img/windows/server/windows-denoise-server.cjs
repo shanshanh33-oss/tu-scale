@@ -8,9 +8,17 @@ const { spawn, spawnSync } = require('child_process')
 
 const HOST = '127.0.0.1'
 const PORT = Number(process.env.TUSCALE_AI_PORT || 5179)
-const APP_ROOT = path.resolve(process.env.TUSCALE_APP_ROOT || path.join(__dirname, '..'))
-const SERVER_ROOT = path.resolve(process.env.TUSCALE_SERVER_DIR || __dirname)
-const PYTHON_PATH = process.env.TUSCALE_PYTHON || 'python.exe'
+const PACKAGED_APP_ROOT = path.resolve(__dirname, '..')
+const SOURCE_APP_ROOT = path.resolve(__dirname, '..', '..')
+const DEFAULT_APP_ROOT = fs.existsSync(path.join(SOURCE_APP_ROOT, 'package.json'))
+  ? SOURCE_APP_ROOT
+  : PACKAGED_APP_ROOT
+const APP_ROOT = path.resolve(process.env.TUSCALE_APP_ROOT || DEFAULT_APP_ROOT)
+const DEFAULT_SERVER_ROOT = fs.existsSync(path.join(APP_ROOT, 'server', 'scunet-denoise.py'))
+  ? path.join(APP_ROOT, 'server')
+  : __dirname
+const SERVER_ROOT = path.resolve(process.env.TUSCALE_SERVER_DIR || DEFAULT_SERVER_ROOT)
+const PYTHON_PATH = process.env.TUSCALE_PYTHON || (process.platform === 'win32' ? 'python.exe' : 'python3')
 const MAX_BODY_BYTES = 120 * 1024 * 1024
 const PROCESS_TIMEOUT_MS = 300_000
 const UPSCALE_TIMEOUT_MS = 900_000
@@ -21,7 +29,10 @@ const ALLOWED_ORIGINS = new Set([
 ])
 
 function checkPythonRuntime() {
-  if (!fs.existsSync(PYTHON_PATH)) return false
+  const usesExplicitPath = path.isAbsolute(PYTHON_PATH)
+    || PYTHON_PATH.includes('/')
+    || PYTHON_PATH.includes('\\')
+  if (usesExplicitPath && !fs.existsSync(PYTHON_PATH)) return false
   const result = spawnSync(PYTHON_PATH, [
     '-c',
     'import numpy; import onnxruntime; from PIL import Image',
@@ -35,24 +46,40 @@ function checkPythonRuntime() {
 
 const PYTHON_RUNTIME_AVAILABLE = checkPythonRuntime()
 
+function firstExistingFile(...candidates) {
+  return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0]
+}
+
 const DENOISE_BACKENDS = {
   scunet: {
     label: 'SCUNet',
-    script: path.join(SERVER_ROOT, 'scunet-denoise.py'),
+    script: firstExistingFile(
+      path.join(SERVER_ROOT, 'scunet-denoise.py'),
+      path.join(APP_ROOT, 'server', 'scunet-denoise.py'),
+    ),
     model: path.join(APP_ROOT, 'waifu2x', 'models-scunet', 'scunet_color_real_psnr.onnx'),
     backend: 'scunet-proxy',
   },
   drunet: {
     label: 'DRUNet',
-    script: path.join(SERVER_ROOT, 'drunet-denoise.py'),
+    script: firstExistingFile(
+      path.join(SERVER_ROOT, 'drunet-denoise.py'),
+      path.join(APP_ROOT, 'server', 'drunet-denoise.py'),
+    ),
     model: path.join(APP_ROOT, 'waifu2x', 'models-drunet', 'drunet_color.onnx'),
     backend: 'drunet-proxy',
   },
 }
 
 const UPSCALE_BACKEND = {
-  script: path.join(SERVER_ROOT, 'waifu2x-upscale.py'),
-  model: path.join(APP_ROOT, 'dist', 'models', 'waifu2x.onnx'),
+  script: firstExistingFile(
+    path.join(__dirname, 'waifu2x-upscale.py'),
+    path.join(SERVER_ROOT, 'waifu2x-upscale.py'),
+  ),
+  model: firstExistingFile(
+    path.join(APP_ROOT, 'dist', 'models', 'waifu2x.onnx'),
+    path.join(APP_ROOT, 'public', 'models', 'waifu2x.onnx'),
+  ),
   backend: 'waifu2x-onnx-cpu',
 }
 
@@ -301,6 +328,8 @@ server.on('error', error => {
 
 server.listen(PORT, HOST, () => {
   console.log(`TU Scale denoise server: http://${HOST}:${PORT}`)
+  console.log(`App root: ${APP_ROOT}`)
+  console.log(`Server root: ${SERVER_ROOT}`)
   console.log(`Python: ${PYTHON_PATH}`)
   console.log(`Models: ${JSON.stringify(getDenoiseAvailability())}`)
 })
