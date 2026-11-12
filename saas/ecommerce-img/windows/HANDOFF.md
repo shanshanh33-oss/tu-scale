@@ -14,8 +14,8 @@
 - Python：3.12.10，路径 `D:\Programs\Python31210\python.exe`
 - pip：25.0.1
 - D 盘开发缓存：`D:\Caches\npm`、`D:\Caches\pip`、`D:\Temp`
-- `npm ci`、lint、测试和构建已通过。
-- `codex/windows-dev` 无已跟踪源码修改。
+- `npm ci` 已通过；本次同步后 lint、91 项测试和构建再次通过。
+- 本次仅修改 `windows/setup-python.ps1` 和本交接文件；模型、ZIP、`.venv`、`node_modules`、`dist` 不得提交。
 - 模型 ZIP 和 `.sha256` 在应用目录中，是本地转移文件，不得提交。
 
 ## 模型包
@@ -27,40 +27,21 @@
 - ZIP 外层 SHA-256 已通过；已解压到项目并通过四个文件的
   `windows\verify-models.ps1` 校验。这些模型和 ZIP 仍不得提交。
 
-## 当前故障
+## 本次 Windows 修复与验证
 
-Python 项目虚拟环境创建后无法启动，首次调用 `.venv` 内 pip 时返回：
+- 从 `codex/windows-dev` 快进至远端基线 `69c6003`，未修改 `main`。
+- 发现 Python 3.12.10 安装文件被移到 `D:\Programs\新建文件夹`，而 `py` 注册路径和用户 PATH 仍指向 `D:\Programs\Python31210`。确认目标路径不存在、无进程使用后，将安装目录改回注册路径；`py -3.12 --version` 返回 3.12.10。
+- `windows/setup-python.ps1` 的两处版本检查和导入检查在 Windows PowerShell 5.1 中会丢失 Python `-c` 参数内的双引号。已改成不依赖引号的等价检查，未更改依赖或业务行为。
+- 按 `powershell -ExecutionPolicy Bypass -File .\windows\setup-python.ps1 -PythonPath 'D:\Programs\Python31210\python.exe'` 重建项目 `.venv`，依赖安装和 `numpy`、`onnxruntime`、Pillow 导入检查通过。pip 缓存及临时目录位于 D 盘。
+- `windows\verify-models.ps1` 的四个文件校验全部通过。
+- `windows\dev-stop.ps1` 与 `windows\dev-start.ps1` 已执行。`http://127.0.0.1:5174/` 返回 HTTP 200；`http://127.0.0.1:5179/denoise/status` 返回 `pythonRuntime=true`、`models.scunet=true`、`models.drunet=true`、`upscale=true`。
+- 在更新后的分支上重新运行 lint、91 项测试和构建，全部通过。未测试真实图片推理或浏览器 WebGPU 性能。
 
-```text
-No Python at '"D:\Programs\Python31210\python.exe'
-```
+## 后续工作
 
-这表明 `.venv` 记录的基础 Python 路径多了引号，不是模型、npm 或源码故障。
-`windows\setup-python.ps1` 已增加自动修复：它使用明确、去除外层引号的 Python
-路径，只重建不可用的项目内 `.venv`，然后安装依赖并验证导入。
-开发服务当前已停止，Python 依赖尚未安装。
-
-## Windows Codex 下一步
-
-Windows Codex 直接负责以下工作，不要让用户在两台电脑之间传递例行输出：
-
-1. 确认工作区没有需要保留的本地修改，拉取最新 `codex/windows-dev`，阅读根目录
-   `AGENTS.md` 和本文件。
-2. 在 `D:\Projects\tu-scale\saas\ecommerce-img` 运行：
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\windows\setup-python.ps1 -PythonPath 'D:\Programs\Python31210\python.exe'
-   ```
-
-   该脚本可以删除并重建仅限项目内、已损坏且被 Git 忽略的 `.venv`；不得
-   删除模型、ZIP、源码或其他本地文件。
-3. 运行 `windows\dev-stop.ps1` 和 `windows\dev-start.ps1`，验证：
-   - `http://127.0.0.1:5174/` 返回 HTTP 200；
-   - 5179 状态的 `pythonRuntime`、`models.scunet`、`models.drunet`、`upscale` 全部为 `true`。
-4. 如有常规错误，先在 Windows 端自主诊断、修复和重试，并保留原始错误与修复记录；
-   不要让用户转述过程日志。
-5. 更新本文件，记录命令、验证结果、遗留问题和最新提交；只提交与当前任务有关的文件，
-   推送 `codex/windows-dev`。
+- 当前完整本地开发服务正在运行；用 `windows\dev-stop.ps1` 只停止记录的 TU Scale 进程。
+- npm 依赖审计曾报告 41 项漏洞告警（5 moderate、36 high）；本次没有自动升级或修改锁文件。
+- Mac 端拉取 `codex/windows-dev` 获取本次脚本修复和验证状态。不要将模型 ZIP、模型、`.venv`、`node_modules`、`dist` 或本地日志提交。
 
 ## 必须向用户请示的情形
 

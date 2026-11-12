@@ -25,7 +25,7 @@ function Test-Python312 {
     return $false
   }
   try {
-    $version = & $Candidate -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null
+    $version = & $Candidate -c 'import sys; print(sys.version_info.major, sys.version_info.minor, sep=chr(46))' 2>$null
     return $LASTEXITCODE -eq 0 -and ($version | Select-Object -Last 1) -eq '3.12'
   } catch {
     return $false
@@ -77,7 +77,7 @@ function Test-VenvPython {
     return $false
   }
   try {
-    $version = & $venvPython -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null
+    $version = & $venvPython -c 'import sys; print(sys.version_info.major, sys.version_info.minor, sep=chr(46))' 2>$null
     return $LASTEXITCODE -eq 0 -and ($version | Select-Object -Last 1) -eq '3.12'
   } catch {
     return $false
@@ -121,7 +121,7 @@ if ($LASTEXITCODE -ne 0) {
   throw 'Windows Python dependency installation failed.'
 }
 
-& $venvPython -c 'import numpy; import onnxruntime; from PIL import Image; print("TU Scale Python AI dependencies are ready.")'
+& $venvPython -c 'import numpy; import onnxruntime; from PIL import Image'
 if ($LASTEXITCODE -ne 0) {
   throw 'Windows Python dependencies were installed, but the import check failed.'
 }
