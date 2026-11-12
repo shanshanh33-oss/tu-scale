@@ -15,6 +15,22 @@
 7. 不得使用破坏性 Git 命令处理未确认的文件。
 8. 不得提交 `.env.local`、API Key、Token、用户反馈文件或其他敏感信息。
 
+## Mac / Windows 跨电脑协作
+
+- Windows 开发使用 `codex/windows-dev`；`main` 仍是 Cloudflare Pages 生产分支，
+  未经用户明确要求不得向 `main` 合并或推送。
+- 每次开始 Windows 工作时，先读取 `saas/ecommerce-img/windows/HANDOFF.md`、
+  检查 `git status -sb` 和近期日志，再从当前证据继续，不要要求用户在
+  Mac 和 Windows 之间复制例行错误日志或诊断指令。
+- Windows Codex 应自主完成任务范围内的安全诊断、进程归属核对、依赖重建、
+  代码修复、验证、提交和推送；只在需要账号/密钥、管理员权限、设备操作、
+  敏感文件、破坏性删除或重大产品选择时向用户请示。
+- 跨电脑状态以 Git 为准。Windows 端每次完成阶段性工作后，更新
+  `saas/ecommerce-img/windows/HANDOFF.md`，只提交相关文件并推送
+  `codex/windows-dev`。Mac 端通过拉取该分支获得状态。
+- 同一时间不得让 Mac 和 Windows 对同一分支做并发写入。工作区干净时先
+  `git pull --rebase`；存在未提交内容时保留并避开，不得为了同步而重置或清理。
+
 ## 不得擅自更换技术栈
 
 未经用户明确确认，禁止：
