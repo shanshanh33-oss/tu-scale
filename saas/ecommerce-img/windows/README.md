@@ -28,9 +28,17 @@ WebGPU/WASM 回退，不会把图片发送到第三方。
 如需调试 SCUNet、DRUNet 和独立进程 AI 放大，还需：
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r .\windows\requirements-windows.txt
+powershell -ExecutionPolicy Bypass -File .\windows\setup-python.ps1
 ```
+
+如果 Python 不在系统搜索路径中，传入完整路径：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\setup-python.ps1 -PythonPath 'D:\Programs\Python31210\python.exe'
+```
+
+脚本会验证 Python 3.12；只有项目内 `.venv` 损坏或不可用时才会重建，
+然后安装锁定依赖并执行导入检查。它不会修改系统 Python 或全局 pip 配置。
 
 并把经 SHA-256 校验的模型包解压到：
 
