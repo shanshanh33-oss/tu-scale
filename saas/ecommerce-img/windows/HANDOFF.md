@@ -67,4 +67,9 @@
 - 本轮 5174 仍返回 HTTP 200；5179 的 pythonRuntime、models.scunet、models.drunet 和 upscale 均为 true。
 - 候选模型初查：Real-ESRGAN 代码仓库 BSD-3-Clause，SPAN 代码仓库 Apache-2.0；模型权重的具体许可、2x 适配、浏览器 ONNX/WebGPU 可用性与同图画质仍需逐项确认。当前不引入或替换任何模型。官方来源：https://github.com/xinntao/Real-ESRGAN 和 https://github.com/hongyuanyu/SPAN 。
 - 下一步优先完成 50 张有代表性的裁切及当前版本完整输出，开展候选模型同图对比与浏览器回退测试；彩色摩尔纹专项放后。Mac 端需另行获得仓库外 QA 原图与清单才能复现，不得提交图片、模型或用户标注。
-- 本阶段验证：quality-baseline.py 成功完成六张原生裁切；npm run lint 通过、npm test 91/91 通过、npm run build 通过。浏览器端 WebGPU/WASM 真正推理、完整 50 张输出和候选模型质量对比尚未执行。
+- 本阶段验证：quality-baseline.py 成功完成六张原生裁切；npm run lint 通过、npm test 91/91 通过、npm run build 通过。当时尚未执行浏览器端 WebGPU/WASM 真正推理、完整 50 张输出和候选模型质量对比；50 张裁切输出见下节。
+
+### 50 张当前模型裁切输出完成（同日后续）
+
+- D:\TU-Scale-QA\quality-crops-50-v3.csv 已按主体与 EXIF 方向修订；D:\TU-Scale-QA\baseline-50-curated-20261113 有 50 张输入、50 张 bicubic 对照、50 张当前 waifu2x 2x 输出，共 150 个 PNG。50 条结果均有原图/输出哈希和耗时，平均 0.656 秒/张，范围 0.627–0.781 秒（384×384 原生像素裁切，本地 ONNX CPU）。最初的中心裁切技术跑批保留作审计，但不作为同图画质比较基准。
+- 本地浏览器实际打开 5174，AI 清晰模式可选，控制台未见新错误；未在网页上传原图，也未完成浏览器 WebGPU/WASM 实际推理。后者与整图导出、50 张人工画质评分仍是后续验收项。
