@@ -56,3 +56,15 @@
 - 需要删除不可重建的文件、更换技术栈、修改产品行为或触发生产部署。
 
 其他常规诊断、重建、测试、开发分支提交和推送，由 Windows Codex 自主完成。
+
+## 2026-11-13 固定画质基线与优先级
+
+- 用户新增 7 张织物图，并在两张截图中圈出真实彩色摩尔纹；此前把这些图仅归为普通织纹是误判。标注保存在仓库外 D:\TU-Scale-QA\annotations，其中第二张对应本地清单 T07。用户随后明确将摩尔纹专项降为后续优先级。
+- 已在仓库外建立 SHA-256 核验的 50 张固定原图清单 D:\TU-Scale-QA\fixed-50.csv：人像 12、商品/汽车 12、建筑/城市 6、自然/纹理 6、织物 7、插画 7。43 张来自用户原图（仅私人 QA，转授权范围未独立核实）；7 张插画直接来自 The Met 官方 Open Access，逐张 API 核验 isPublicDomain=true，来源、作者和 SHA-256 见 licensed-samples\met-manifest.csv。The Met 的 Open Access 说明：https://www.metmuseum.org/hubs/open-access 。
+- Wikimedia Commons 数码摄影摩尔纹分类中已找到逐张标注 CC 许可的候选，但官方图片服务器返回 HTTP 429，未下载、未计入固定 50 张。不得从镜像绕过限流。
+- 新增 windows/quality-baseline.py，只读仓库外原图和裁切 CSV，调用现有本地 waifu2x.onnx Python CPU 路径，把 2x 输出、bicubic 对照、模型与输入哈希及耗时写到仓库外新目录。无产品代码、模型、依赖或生产环境改动。
+- 已用 quality-crops-6-v3.csv 对人像、汽车、建筑、自然、织物、插画各 1 张运行当前模型：384×384 原生像素裁切输出为 768×768；六次耗时 0.65–0.72 秒。该结果只代表本机本地 CPU 裁切推理，不代表网页 WebGPU/WASM、整图或用户最终导出速度。前两版自动中心裁切误选背景，其记录保留但不作为画质判断。输出位于 D:\TU-Scale-QA\baseline-20261113-03。
+- 本轮 5174 仍返回 HTTP 200；5179 的 pythonRuntime、models.scunet、models.drunet 和 upscale 均为 true。
+- 候选模型初查：Real-ESRGAN 代码仓库 BSD-3-Clause，SPAN 代码仓库 Apache-2.0；模型权重的具体许可、2x 适配、浏览器 ONNX/WebGPU 可用性与同图画质仍需逐项确认。当前不引入或替换任何模型。官方来源：https://github.com/xinntao/Real-ESRGAN 和 https://github.com/hongyuanyu/SPAN 。
+- 下一步优先完成 50 张有代表性的裁切及当前版本完整输出，开展候选模型同图对比与浏览器回退测试；彩色摩尔纹专项放后。Mac 端需另行获得仓库外 QA 原图与清单才能复现，不得提交图片、模型或用户标注。
+- 本阶段验证：quality-baseline.py 成功完成六张原生裁切；npm run lint 通过、npm test 91/91 通过、npm run build 通过。浏览器端 WebGPU/WASM 真正推理、完整 50 张输出和候选模型质量对比尚未执行。
