@@ -30,39 +30,54 @@ export const readClassicPdfTable = (bytes) => {
   const references = [...tail.matchAll(/startxref\s+(\d+)\s+%%EOF/g)]
   const xrefOffset = Number(references.at(-1)?.[1])
   if (!Number.isSafeInteger(xrefOffset) || xrefOffset < 0 || xrefOffset >= bytes.length) throw unsupported()
-  const tableText = asText(bytes, xrefOffset, Math.min(bytes.length, xrefOffset + 2000000))
-  if (!/^xref(?:\r\n|\r|\n)/.test(tableText)) throw unsupported()
   if (/\/Linearized\b/.test(asText(bytes, 0, Math.min(bytes.length, 2048)))) throw unsupported()
-
-  const lines = tableText.split(/\r\n|\r|\n/)
   const entries = new Map()
-  let lineIndex = 1
-  while (lineIndex < lines.length && lines[lineIndex].trim() !== 'trailer') {
-    const section = /^(\d+)\s+(\d+)$/.exec(lines[lineIndex].trim())
-    if (!section) throw unsupported()
-    const firstId = Number(section[1])
-    const count = Number(section[2])
-    if (!Number.isSafeInteger(firstId) || !Number.isSafeInteger(count) || count > 1000000) throw unsupported()
-    lineIndex += 1
-    for (let index = 0; index < count; index += 1, lineIndex += 1) {
-      const entry = /^(\d{10})\s+(\d{5})\s+([nf])\b/.exec(lines[lineIndex] || '')
-      if (!entry) throw unsupported()
-      if (entry[3] === 'n' && Number(entry[1]) > 0) entries.set(firstId + index, {
-        offset: Number(entry[1]),
-        generation: Number(entry[2]),
-      })
+  const seen = new Set()
+  let currentOffset = xrefOffset
+  let metadata
+  let hasXrefStream = false
+  while (currentOffset !== null) {
+    if (seen.has(currentOffset) || seen.size >= 32) throw unsupported()
+    seen.add(currentOffset)
+    const tableText = asText(bytes, currentOffset, Math.min(bytes.length, currentOffset + 2000000))
+    if (!/^xref(?:\r\n|\r|\n)/.test(tableText)) throw unsupported()
+    const lines = tableText.split(/\r\n|\r|\n/)
+    let lineIndex = 1
+    while (lineIndex < lines.length && lines[lineIndex].trim() !== 'trailer') {
+      const section = /^(\d+)\s+(\d+)$/.exec(lines[lineIndex].trim())
+      if (!section) throw unsupported()
+      const firstId = Number(section[1])
+      const count = Number(section[2])
+      if (!Number.isSafeInteger(firstId) || !Number.isSafeInteger(count) || count > 1000000) throw unsupported()
+      lineIndex += 1
+      for (let index = 0; index < count; index += 1, lineIndex += 1) {
+        const entry = /^(\d{10})\s+(\d{5})\s+([nf])\b/.exec(lines[lineIndex] || '')
+        if (!entry) throw unsupported()
+        const objectId = firstId + index
+        if (entries.has(objectId)) continue
+        entries.set(objectId, entry[3] === 'n' && Number(entry[1]) > 0
+          ? { offset: Number(entry[1]), generation: Number(entry[2]) }
+          : null)
+      }
     }
+    if (lines[lineIndex]?.trim() !== 'trailer') throw unsupported()
+    const trailer = lines.slice(lineIndex + 1).join('\n').split(/startxref\b/)[0]
+    if (/\/Encrypt\b/.test(trailer)) throw unsupported()
+    if (/\/XRefStm\b/.test(trailer)) hasXrefStream = true
+    const size = Number(/\/Size\s+(\d+)/.exec(trailer)?.[1])
+    const root = /\/Root\s+(\d+\s+\d+\s+R)\b/.exec(trailer)?.[1]
+    const info = /\/Info\s+(\d+\s+\d+\s+R)\b/.exec(trailer)?.[1]
+    const id = /\/ID\s*(\[[\s\S]*?\])/.exec(trailer)?.[1]
+    if (!metadata) metadata = { size, root, info, id }
+    const previous = /\/Prev\s+(\d+)\b/.exec(trailer)?.[1]
+    currentOffset = previous === undefined ? null : Number(previous)
+    if (currentOffset !== null && (!Number.isSafeInteger(currentOffset) || currentOffset < 0 || currentOffset >= xrefOffset)) throw unsupported()
   }
-  if (lines[lineIndex]?.trim() !== 'trailer') throw unsupported()
-  const trailer = lines.slice(lineIndex + 1).join('\n').split(/startxref\b/)[0]
-  if (/\/(?:Prev|XRefStm|Encrypt)\b/.test(trailer)) throw unsupported()
-  const size = Number(/\/Size\s+(\d+)/.exec(trailer)?.[1])
-  const root = /\/Root\s+(\d+\s+\d+\s+R)\b/.exec(trailer)?.[1]
-  const info = /\/Info\s+(\d+\s+\d+\s+R)\b/.exec(trailer)?.[1]
-  const id = /\/ID\s*(\[[\s\S]*?\])/.exec(trailer)?.[1]
+  for (const [id, entry] of entries) if (!entry) entries.delete(id)
+  const { size, root, info, id } = metadata
   if (!Number.isSafeInteger(size) || size < 2 || size > 1000000 || !root || !entries.size) throw unsupported()
   if ([...entries.values()].some(entry => entry.offset < 0 || entry.offset >= xrefOffset)) throw unsupported()
-  return { entries, size, root, info, id, xrefOffset }
+  return { entries, size, root, info, id, xrefOffset, xrefOffsets: [...seen], hasComplexXref: seen.size > 1 || hasXrefStream }
 }
 
 const getObjectPrefix = (bytes, entry, end) => asText(bytes, entry.offset, Math.min(end, entry.offset + 4096))
@@ -147,10 +162,12 @@ export const compressPdfImagesKeepingText = async (file, {
   for (let index = 0; index < ordered.length; index += 1) {
     assertNotAborted(signal)
     const [objectId, object] = ordered[index]
-    const end = ordered[index + 1]?.[1].offset ?? table.xrefOffset
+    const end = Math.min(ordered[index + 1]?.[1].offset ?? table.xrefOffset,
+      ...table.xrefOffsets.filter(offset => offset > object.offset))
     if (!asText(bytes, object.offset, Math.min(end, object.offset + 32)).startsWith(`${objectId} ${object.generation} obj`)) throw unsupported()
     const image = getJpegImage(bytes, object, end)
     if (!image) continue
+    if (table.hasComplexXref) throw unsupported('此 PDF 使用复杂交叉引用结构，当前无法安全替换照片；原文件未被修改')
     imageCount += 1
     onProgress?.({ completed: imageCount, total: imageCount, percent: Math.min(85, (index / ordered.length) * 85), stage: `正在压缩第 ${imageCount} 张 PDF 图片` })
     let replacement

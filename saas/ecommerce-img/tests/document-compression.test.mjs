@@ -11,7 +11,7 @@ import {
   getDocumentCompressionKind,
   getPptxMediaKind,
 } from '../src/tools/documentCompression.js'
-import { compressPdfImagesKeepingText } from '../src/tools/pdfImageCompression.js'
+import { compressPdfImagesKeepingText, readClassicPdfTable } from '../src/tools/pdfImageCompression.js'
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
@@ -96,6 +96,14 @@ const buildTextAndPhotoPdf = async () => {
   return new File(parts, 'text-photo.pdf', { type: 'application/pdf' })
 }
 
+const appendEmptyRevision = async (file) => {
+  const original = new Uint8Array(await file.arrayBuffer())
+  const text = new TextDecoder('latin1').decode(original)
+  const previous = Number([...text.matchAll(/startxref\s+(\d+)\s+%%EOF/g)].at(-1)?.[1])
+  const revision = new TextEncoder().encode(`xref\n0 0\ntrailer\n<< /Size 7 /Root 1 0 R /Prev ${previous} >>\nstartxref\n${original.length}\n%%EOF\n`)
+  return new File([original, revision], file.name, { type: 'application/pdf' })
+}
+
 const extractFirstPageText = async (blob) => {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const loadingTask = getDocument({ data: new Uint8Array(await blob.arrayBuffer()), useSystemFonts: true })
@@ -131,6 +139,19 @@ test('照片无法缩小时不生成丢失文字的压缩版', async () => {
   await assert.rejects(
     compressPdfImagesKeepingText(source, { recompressJpeg: async bytes => bytes }),
     /未生成丢失文字的版本/,
+  )
+})
+
+test('能识别增量交叉引用；复杂结构不会被错误地重写', async () => {
+  const source = await appendEmptyRevision(await buildTextAndPhotoPdf())
+  const table = readClassicPdfTable(new Uint8Array(await source.arrayBuffer()))
+  assert.equal(table.hasComplexXref, true)
+  assert.equal(table.entries.size, 6)
+  await assert.rejects(
+    compressPdfImagesKeepingText(source, {
+      recompressJpeg: async bytes => new Uint8Array(await sharp(bytes).jpeg({ quality: 50 }).toBuffer()),
+    }),
+    /复杂交叉引用结构/,
   )
 })
 

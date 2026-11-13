@@ -1,6 +1,14 @@
 # TU Scale Windows 开发交接
 
-> 更新日期：2026-11-12（Asia/Shanghai）
+## 2026-11-13 PDF 压缩错误诊断与修复
+
+- 用户提供的 Word 导出 PDF 使用带 `/Prev` 和 `/XRefStm` 的混合交叉引用结构。旧版 PDF 图片压缩器在读取图片前即报“内部结构暂不支持”。
+- `src/tools/pdfImageCompression.js` 现在能遍历传统交叉引用链；对于这类无可处理 JPEG 照片的文件，提示“没有可进一步压缩的照片”。若复杂结构包含可处理照片，仍会拒绝改写，避免损坏文字、标签或其他对象。
+- `tests/document-compression.test.mjs` 新增增量交叉引用回归测试；真实问题 PDF 的本地运行确认提示已变为“没有可进一步压缩的照片”。原文件未加入仓库。
+- lint、92 项测试通过。构建使用 `npm run build -- --configLoader runner` 通过；普通 `npm run build` 在本次隔离副本中因 `node_modules` 指向只读原工作区，Vite 无法写入临时配置文件而失败，非源码构建错误。
+- 此修改仅涉及前端 PDF 压缩和测试，不涉及 Functions、KV、第三方 API 或生产部署。无照片 PDF 的进一步无损结构压缩尚未实现；本次没有新增依赖或改变原有有照片 PDF 的压缩行为。
+
+> 更新日期：2026-11-13（Asia/Shanghai）
 > 工作分支：`codex/windows-dev`
 > 本文件是 Mac / Windows Codex 之间的直接交接渠道；用户不负责转述例行日志。
 
