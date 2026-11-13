@@ -3,10 +3,12 @@
 ## 2026-11-13 PDF 压缩错误诊断与修复
 
 - 用户提供的 Word 导出 PDF 使用带 `/Prev` 和 `/XRefStm` 的混合交叉引用结构。旧版 PDF 图片压缩器在读取图片前即报“内部结构暂不支持”。
-- `src/tools/pdfImageCompression.js` 现在能遍历传统交叉引用链；对于这类无可处理 JPEG 照片的文件，提示“没有可进一步压缩的照片”。若复杂结构包含可处理照片，仍会拒绝改写，避免损坏文字、标签或其他对象。
-- `tests/document-compression.test.mjs` 新增增量交叉引用回归测试；真实问题 PDF 的本地运行确认提示已变为“没有可进一步压缩的照片”。原文件未加入仓库。
-- lint、92 项测试通过。构建使用 `npm run build -- --configLoader runner` 通过；普通 `npm run build` 在本次隔离副本中因 `node_modules` 指向只读原工作区，Vite 无法写入临时配置文件而失败，非源码构建错误。
-- 此修改仅涉及前端 PDF 压缩和测试，不涉及 Functions、KV、第三方 API 或生产部署。无照片 PDF 的进一步无损结构压缩尚未实现；本次没有新增依赖或改变原有有照片 PDF 的压缩行为。
+- `src/tools/pdfImageCompression.js` 现在能遍历传统交叉引用链；复杂结构仍不会被旧图片重写器直接改动，避免损坏文字、标签或其他对象。
+- 经用户同意新增 `pdf-lib@1.17.1`：图片压缩无法缩小时，`src/tools/pdfStructureCompression.js` 尝试在浏览器本地重写对象流。仅在文件更小且页数、尺寸及 PDF.js 提取文字校验通过后输出；疑似签名 PDF 不进入该回退。依赖被动态加载，新增独立构建块约 395 KB（gzip 约 168 KB）。
+- Windows 静态服务原本把 `.mjs` PDF worker 作为 `application/octet-stream` 返回；`windows/server/windows-static-server.cjs` 已补 `text/javascript` 类型。界面上的 PDF 压缩说明已同步更新。
+- `tests/document-compression.test.mjs` 新增增量交叉引用、无照片文字 PDF 结构优化和签名保护测试。lint、94 项测试及普通 `npm run build` 均通过；真实问题 PDF 在网页构建和本机安装版资源副本的浏览器测试中均从 551.7 KB 降至 539.4 KB，显示保留可搜索文字。另用 Poppler/Pillow 核对该文件的两页渲染逐像素一致，并用 pypdf 核对文字、目录及无障碍标签。
+- 本机安装目录已应用经副本验证的局部热修补；原有文件备份位于本次工作区 `output/installed-backup`。安装包重新安装可能覆盖热修补。源码修复未发布到生产环境。
+- 推送 `codex/windows-dev` 到 GitHub 时，自动审批因无法确认远端仓库归属而拒绝；不要绕过该拒绝。当前源码提交保留在隔离工作区，待用户明确批准推送。
 
 > 更新日期：2026-11-13（Asia/Shanghai）
 > 工作分支：`codex/windows-dev`

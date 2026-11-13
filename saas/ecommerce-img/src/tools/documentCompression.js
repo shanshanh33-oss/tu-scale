@@ -264,6 +264,37 @@ const pdfHasDrawnText = async (file, signal) => {
   }
 }
 
+const verifyPdfTextAndPages = async (sourceFile, outputBlob, signal) => {
+  const pdfjs = await loadPdfJs()
+  const sourceTask = pdfjs.getDocument({ data: new Uint8Array(await sourceFile.arrayBuffer()), isEvalSupported: false, useSystemFonts: true })
+  const outputTask = pdfjs.getDocument({ data: new Uint8Array(await outputBlob.arrayBuffer()), isEvalSupported: false, useSystemFonts: true })
+  let sourceDocument
+  let outputDocument
+  try {
+    const documents = await Promise.all([sourceTask.promise, outputTask.promise])
+    sourceDocument = documents[0]
+    outputDocument = documents[1]
+    if (sourceDocument.numPages !== outputDocument.numPages) return false
+    for (let number = 1; number <= sourceDocument.numPages; number += 1) {
+      assertNotAborted(signal)
+      const [sourcePage, outputPage] = await Promise.all([sourceDocument.getPage(number), outputDocument.getPage(number)])
+      const [sourceText, outputText] = await Promise.all([sourcePage.getTextContent(), outputPage.getTextContent()])
+      const samePage = sourcePage.rotate === outputPage.rotate
+        && JSON.stringify(sourcePage.view) === JSON.stringify(outputPage.view)
+        && JSON.stringify(sourceText.items.map(item => item.str)) === JSON.stringify(outputText.items.map(item => item.str))
+      sourcePage.cleanup()
+      outputPage.cleanup()
+      if (!samePage) return false
+    }
+    return true
+  } finally {
+    await Promise.allSettled([
+      sourceDocument ? sourceDocument.destroy() : sourceTask.destroy(),
+      outputDocument ? outputDocument.destroy() : outputTask.destroy(),
+    ])
+  }
+}
+
 export const compressPdfFile = async (file, options = {}) => {
   if (getDocumentCompressionKind(file) !== 'pdf') throw new Error('请选择 PDF 文件')
   const { presetId = 'balanced', signal, onProgress } = options
@@ -288,6 +319,26 @@ export const compressPdfFile = async (file, options = {}) => {
   } catch (error) {
     if (signal?.aborted || error?.name === 'AbortError') throw error
     preservationError = error
+  }
+
+  try {
+    const { compressPdfStructureKeepingText } = await import('./pdfStructureCompression')
+    const result = await compressPdfStructureKeepingText(file, {
+      signal,
+      onProgress,
+      verifyDocument: verifyPdfTextAndPages,
+    })
+    return {
+      ...result,
+      kind: 'pdf',
+      textPreserved: true,
+      originalSize: file.size || 0,
+      compressedSize: result.blob.size,
+      fileName: getCompressedDocumentName(file.name, 'pdf'),
+    }
+  } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError') throw error
+    if (error?.code !== 'PDF_STRUCTURE_NO_GAIN') preservationError = error
   }
 
   onProgress?.({ completed: 0, total: 0, percent: 2, stage: '正在确认是否为纯扫描 PDF' })

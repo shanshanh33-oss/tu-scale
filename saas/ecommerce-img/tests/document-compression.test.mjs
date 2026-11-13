@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import JSZip from 'jszip'
 import sharp from 'sharp'
 import { File } from 'node:buffer'
+import { PDFDocument, StandardFonts } from 'pdf-lib'
 import {
   buildRasterPdf,
   compressPptxFile,
@@ -12,6 +13,7 @@ import {
   getPptxMediaKind,
 } from '../src/tools/documentCompression.js'
 import { compressPdfImagesKeepingText, readClassicPdfTable } from '../src/tools/pdfImageCompression.js'
+import { compressPdfStructureKeepingText } from '../src/tools/pdfStructureCompression.js'
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
@@ -153,6 +155,24 @@ test('能识别增量交叉引用；复杂结构不会被错误地重写', async
     }),
     /复杂交叉引用结构/,
   )
+})
+
+test('无照片文字 PDF 可通过结构优化缩小且保留文字与页数', async () => {
+  const document = await PDFDocument.create()
+  const font = await document.embedFont(StandardFonts.Helvetica)
+  for (let index = 0; index < 12; index += 1) {
+    document.addPage([400, 300]).drawText(`Keep me searchable ${index}`, { x: 25, y: 250, font, size: 16 })
+  }
+  const source = new File([await document.save({ useObjectStreams: false })], 'text-only.pdf', { type: 'application/pdf' })
+  const result = await compressPdfStructureKeepingText(source)
+  assert.equal(result.pageCount, 12)
+  assert.ok(result.blob.size < source.size)
+  assert.deepEqual(await extractFirstPageText(result.blob), await extractFirstPageText(source))
+})
+
+test('结构优化拒绝可能已签名的 PDF', async () => {
+  const file = new File([new TextEncoder().encode('%PDF-1.7\n/ByteRange [0 1 2 3]')], 'signed.pdf', { type: 'application/pdf' })
+  await assert.rejects(compressPdfStructureKeepingText(file), /数字签名/)
 })
 
 test('PPTX 压缩只替换媒体图片并保留演示结构和其他资源', async () => {
