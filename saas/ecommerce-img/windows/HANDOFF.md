@@ -92,3 +92,11 @@
 - 重新启动后 5174 返回 HTTP 200；5179 的 pythonRuntime、models.scunet、models.drunet、upscale 全为 true；PDF worker 的 .mjs 请求返回 HTTP 200 和 text/javascript。
 - PDF 功能改动包含复杂交叉引用安全处理、无损结构优化回退、页数及文字校验、签名文件保护；其他会话已用用户问题 PDF 在隔离副本验证约 551.7 KB 降至 539.4 KB。本次 D 盘整合仅复跑自动测试和本地服务检查，没有重复读取该用户 PDF。
 - 不提交模型、ZIP、原图、.venv、node_modules、dist 或用户 PDF。下一步仍是候选模型许可与同图质量对比，摩尔纹专项排后。
+
+## 2026-11-14 候选放大模型评估
+
+- 已完成 50 张固定裁切的 AMD SESR-M7 FP32/INT8 与 nunif photo 2× 同图输出，以及 7 张插画的 nunif art 2× 输出；模型、原图、结果和逐张哈希均留在仓库外 `D:\TU-Scale-QA\candidate-models`。
+- AMD 模型官方页面标明 Apache-2.0，nunif 作者确认仓库和 Release 权重适用 MIT；本地许可副本已留档。nunif 只从官方 Release ZIP 提取两个条目并校验 ZIP CRC、长度及本地 SHA；未下载完整 ZIP。
+- nunif photo 已在独立浏览器测试页通过合成输入的 WebGPU 和 WASM 推理，包括 400×400 模型输入到 768×768 输出。该测试页仅用于 QA，端口 5180 已关闭。
+- 指标及少量目视抽查尚不足以认定画质升级；AMD 与当前结果接近，nunif 边缘更强但有过锐化风险。没有更换产品模型或前端处理流程。详见 [MODEL_CANDIDATE_AUDIT.md](MODEL_CANDIDATE_AUDIT.md)。
+- 后续优先进行 50 张人工盲评和整图/透明图/大图资源/浏览器回退验证；彩色摩尔纹专项后置。替换 waifu2x 前须按 AGENTS.md 获得用户明确确认。
