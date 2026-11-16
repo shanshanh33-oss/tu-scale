@@ -17,6 +17,7 @@ import { createFileFromHistoryEntry, createHistoryThumbnail, getHistoryEntry, ge
 import { pdfTaskStore } from './tools/pdfTaskStore'
 
 const PdfExtractor = lazy(() => import('./tools/PdfExtractor'))
+const MemberPage = lazy(() => import('./membership/MemberPage'))
 
 const QUALITY_PRESETS = [
   { edge: 1080, label: '1080级', desc: '最长边 1080px' },
@@ -31,6 +32,7 @@ const TOOL_NAV = [
   { id: 'product-image', label: '商品图规范化', path: '/product-image' },
   { id: 'pdf', label: 'PDF 提取', path: '/pdf-extractor' },
   { id: 'contact', label: '反馈联系', path: '/contact' },
+  { id: 'member', label: '会员中心', path: '/member' },
 ]
 
 const trackUpscaleFeature = (feature) => trackEvent('feature_click', { tool: 'upscale', feature })
@@ -189,6 +191,10 @@ const PAGE_META = {
   '/contact': {
     title: '反馈与联系 - TU Scale 本地图片工具箱',
     description: '向 TU Scale 提交功能建议、问题反馈、格式支持请求、批量图片处理需求或合作意向。',
+  },
+  '/member': {
+    title: '会员中心 - TU Scale',
+    description: 'TU Scale 会员账号：邮箱验证注册及登录、手机号验证绑定。免费本地图片工具无需登录。',
   },
 }
 
@@ -2623,6 +2629,11 @@ const zipDownloadLockRef = useRef(false)
     {historyOverlay}
     {pdfTaskIndicator}
   </>
+  if (route === '/member') return (
+    <Suspense fallback={<PageLoading label="正在加载会员中心…" />}>
+      <MemberPage navigate={navigate} />
+    </Suspense>
+  )
 
  return (
     <div className="min-h-screen bg-gray-50/80">

@@ -1,6 +1,8 @@
 # TU Scale 会员系统方案草案（2026-11-16）
 
-状态：**规划；离线权益状态原型已实现，但未接入账号、数据库、页面或支付，也未定价**。与 `COMMERCIAL_READINESS_20261116.md` 配套。现有 React/Vite 前端、Cloudflare Pages Functions/KV、匿名统计和本地图片处理保持原样；仓库目前没有普通用户账号、订单、支付或会员权益接口（见 `PROJECT.md` 与 `functions/api/`）。不把管理员看板 Token 当作会员身份。
+状态：**Better Auth 账号代码已在开发分支实现，尚未配置 D1 与邮件/短信发送，不能对真实用户开放；权益账本仍是离线原型，尚无订单、支付或定价**。与 `COMMERCIAL_READINESS_20261116.md` 配套。现有 React/Vite 图片工具、Cloudflare Pages Functions/KV、匿名统计和本地图片处理保持原样。不把管理员看板 Token 当作会员身份。
+
+账号实现见 [MEMBER_SETUP.md](MEMBER_SETUP.md)：邮箱验证码注册/登录、登录后短信验证绑定、服务端会话及退出。会员服务未配置时页面明确显示暂未启用；免费工具无需登录。腾讯云迁移需保留用户与会话语义并另行规划数据库和发送服务迁移，不能直接复制 D1 文件。
 
 ## 已做的可运行部分
 

@@ -126,3 +126,12 @@
 - 在用户指出此前只有文档、缺少实际实现后，新增 `src/membership/entitlementLedger.js` 和 `tests/membership-ledger.test.mjs`。这是未接入产品的可运行状态转换：虚构额度发放、任务预占、成功结算、失败释放、重复事件幂等、余额不足拒绝、单进程并发串行化；对无法安全自动撤销的授权要求人工核对。
 - 没有新增依赖，没有接入前端、Functions、KV、账号、订单、真实价格或支付；未创建用户数据。单进程内存执行器不能替代跨进程事务数据库，代码不得用于实际收费。方案状态见 [MEMBERSHIP_PLAN_20261116.md](MEMBERSHIP_PLAN_20261116.md)。
 - 专项 7 项测试通过；全量 lint、测试、构建通过。仅提交源码、测试与交接文档到 `codex/windows-dev`，不碰 `main` 或线上环境。
+
+## 2026-11-16 Better Auth 账号系统（开发分支）
+
+- 用户确认 Better Auth 作为正式账号底层。新增 `/member` 会员页、`/api/auth/*` Pages Function、Better Auth 1.7.25 和 D1 建表脚本。实现邮箱验证码注册/登录、已登录账号的手机短信验证绑定、服务端会话及退出；仅开放所需的六个认证接口。
+- 会员库使用独立 `MEMBER_DB` D1，统计/反馈 KV 和免费图片工具未改。要求 `MEMBER_AUTH_SECRET`、`MEMBER_AUTH_URL`、邮箱及短信每日预算，以及 `MEMBER_DELIVERY` 发送服务绑定；任何缺项均返回 503。未配置真实数据库、发送服务、密钥、生产 Pages 项目或部署，当前不可供真实用户注册。
+- 服务端邮箱验证码哈希存储；验证码有效期 10 分钟，按 D1 记录每客户端限流与全局每日发送预算。发送方拒绝或预算耗尽时页面不会显示成功。未登录不能触发短信发送或绑定。测试使用模拟 D1 和发送方，不包含真实邮件或短信投递。
+- D1 schema 从当前 Better Auth 配置生成，并通过库的迁移检测确认无差异。`tests/member-auth.test.mjs` 覆盖注册、绑手机、退出、越权、发送失败及预算；`tests/member-api.test.mjs` 覆盖前端映射。官方 Wrangler 4.163.0 在本机用 `nodejs_compat` 成功打包 Pages Functions，未部署。
+- 5174 的 Vite 本地服务会对不存在的 `/api/auth/*` 返回 HTTP 200 的 HTML 回退页；前端现将非 JSON 响应视作服务未启用，不会误报验证码已发送。只启动 Vite 不等于启动会员后端。
+- 启用前的配置、个人信息处理、清理和腾讯云迁移前置条件见 [MEMBER_SETUP.md](MEMBER_SETUP.md)。账号删除/数据保留、供应商选择、真实投递及预发布浏览器验收仍需完成。没有订单、支付、会员价格或权益启用。
