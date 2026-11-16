@@ -112,3 +112,11 @@
 - 浏览器实测：仅启动前端 `dev-start.ps1 -SkipAi`，5179 未运行；The Met Open Access 的 MET-697703 384×384 样本在浏览器 WebGPU AI 模式完成 2 倍放大，输出 768×768。另以仓库外合成 128×128 透明 PNG 复现旧问题：中心 alpha 原为 128，旧导出为 192；修复后 AI 导出 256×256 的全部 65,536 个 alpha 值与原图最近邻 2 倍映射完全一致。普通非 AI 模式同时开启自动色阶与智能锐化，中心 alpha 保持 128、透明角落保持 0。
 - 输入及修复前后 PNG 均保存在仓库外 `D:\TU-Scale-QA\browser-regression-20261116`，不得提交。针对当前变更运行 `npm run lint` 通过、`npm test` 94/94 通过、`npm run build` 通过。未在本轮测批量、裁切、JPEG/WebP、Safari 或大图内存；上线前仍需跨浏览器回归。
 - 5174 本地前端服务在测试后保持运行；5179 没有为本轮测试启动。生产 `main` 和线上配置未触动。
+
+## 2026-11-16 画质、浏览器回退与商业化规划
+
+- 50 张固定裁切完成 A/B/C 随机匿名比较；本轮自动化审查者在原尺寸局部与整图总览中 50/50 均未选出稳定胜者。评价先于解盲保存，证据仅在仓库外 `D:\TU-Scale-QA\blind-review-20261116`。这不是独立人工用户验收，不支持替换现有 waifu2x；织物摩尔纹专项仍后置。
+- 浏览器 WebGPU 实测 2100×1050 大图 2× 输出 4200×2100、600×400 图居中 1:1 裁切后输出 1080×1080、两图批量 ZIP 内容及尺寸均通过检查。合成图与公开 CC0 样本及输出保存在仓库外 `D:\TU-Scale-QA\browser-acceptance-20261116`。详细范围和局限见 [QUALITY_BROWSER_ACCEPTANCE_20261116.md](QUALITY_BROWSER_ACCEPTANCE_20261116.md)。
+- 发现禁用 WebGPU 且跨源隔离时，浏览器 WASM 多线程模型初始化在本机内置 Chromium 卡住；临时 QA 页面单线程可运行。局部将 `src/ai/waifu2x.js` 的 WASM 线程数固定为 1，重建后仅在 QA 页面禁用 WebGPU，状态显示 WASM 模型已就绪，透明 PNG AI 放大完成。可能影响无 WebGPU 设备速度，尚待普通 Chrome/Edge、Mac Safari 和低内存机器测量。临时 5180/5181 服务已停止；5174 本地服务保持运行，5179 未启动。
+- 本轮 `npm run lint` 通过、`npm test` 94/94 通过、`npm run build` 通过。没有修改模型、Functions、KV、生产 `main` 或线上部署。
+- 竞品官方价格与商业化门槛见 [COMMERCIAL_READINESS_20261116.md](COMMERCIAL_READINESS_20261116.md)；会员系统仅为 [MEMBERSHIP_PLAN_20261116.md](MEMBERSHIP_PLAN_20261116.md) 草案，没有账号、订单、支付或额度代码。下一步先确定经证实值得收费的云能力、单位成本、地区与支付方案，再进行隔离环境原型；不得把草案价格变成收费配置。

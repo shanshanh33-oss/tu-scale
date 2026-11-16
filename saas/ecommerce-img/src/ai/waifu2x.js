@@ -28,26 +28,10 @@ function isMobileDevice() {
     || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
 }
 
-function isAppleMobileDevice() {
-  if (typeof navigator === 'undefined') return false;
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent)
-    || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
-}
-
 function configureWasm(ort) {
-  var deviceMemory = typeof navigator !== 'undefined' ? Number(navigator.deviceMemory) : 0;
-  var hardwareThreads = typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) : 1;
-  var canUseThreads = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
-  var mobileDevice = isMobileDevice();
-  var appleMobile = isAppleMobileDevice();
-  var threadLimit = appleMobile
-    ? 1
-    : !mobileDevice && deviceMemory >= 8 && hardwareThreads >= 8
-      ? 4
-      : 2;
-  ort.env.wasm.numThreads = canUseThreads && !(deviceMemory > 0 && deviceMemory <= 4)
-    ? Math.max(1, Math.min(threadLimit, hardwareThreads || 1))
-    : 1;
+  // Some cross-origin isolated browsers advertise worker threads but never
+  // finish ONNX Runtime initialization. Keep the GPU fallback dependable.
+  ort.env.wasm.numThreads = 1;
   // The packaged ORT proxy worker fails to initialize on some mobile Safari
   // and Android WebView versions. Small tiles plus frequent browser yields are
   // more compatible while keeping the exact same model math.
