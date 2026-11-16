@@ -1149,12 +1149,7 @@ const zipDownloadLockRef = useRef(false)
               onStage?.('清理文字背景与压缩噪点')
               processed = textSourceCleanupFilter(processed)
             }
-            // Create a temporary canvas to put processed data
-            const tempCanvas = document.createElement('canvas')
-            tempCanvas.width = sourceW
-            tempCanvas.height = sourceH
-            tempCanvas.getContext('2d').putImageData(processed, 0, 0)
-            srcCtx.drawImage(tempCanvas, 0, 0)
+            srcCtx.putImageData(processed, 0, 0)
           }
 
           if (!isTextMode && doEnhance.localizedChromaMoire && doEnhance.localizedMoireMask) {
@@ -1263,11 +1258,7 @@ const zipDownloadLockRef = useRef(false)
             const preData = srcCtx.getImageData(0, 0, sourceW, sourceH)
             const preSharp = unsharpMask(preData, sharpenAmount * 0.8)
             const protectedPreSharp = protectFaceSkinFromSharpening(preData, preSharp, faceSkinMask, doEnhance.faceSkinStrength)
-            const tempPre = document.createElement('canvas')
-            tempPre.width = sourceW
-            tempPre.height = sourceH
-            tempPre.getContext('2d').putImageData(protectedPreSharp, 0, 0)
-            srcCtx.drawImage(tempPre, 0, 0)
+            srcCtx.putImageData(protectedPreSharp, 0, 0)
           }
 
           if (doEnhance.aiUpscale) {
