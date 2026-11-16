@@ -120,3 +120,9 @@
 - 发现禁用 WebGPU 且跨源隔离时，浏览器 WASM 多线程模型初始化在本机内置 Chromium 卡住；临时 QA 页面单线程可运行。局部将 `src/ai/waifu2x.js` 的 WASM 线程数固定为 1，重建后仅在 QA 页面禁用 WebGPU，状态显示 WASM 模型已就绪，透明 PNG AI 放大完成。可能影响无 WebGPU 设备速度，尚待普通 Chrome/Edge、Mac Safari 和低内存机器测量。临时 5180/5181 服务已停止；5174 本地服务保持运行，5179 未启动。
 - 本轮 `npm run lint` 通过、`npm test` 94/94 通过、`npm run build` 通过。没有修改模型、Functions、KV、生产 `main` 或线上部署。
 - 竞品官方价格与商业化门槛见 [COMMERCIAL_READINESS_20261116.md](COMMERCIAL_READINESS_20261116.md)；会员系统仅为 [MEMBERSHIP_PLAN_20261116.md](MEMBERSHIP_PLAN_20261116.md) 草案，没有账号、订单、支付或额度代码。下一步先确定经证实值得收费的云能力、单位成本、地区与支付方案，再进行隔离环境原型；不得把草案价格变成收费配置。
+
+## 2026-11-16 会员权益离线原型
+
+- 在用户指出此前只有文档、缺少实际实现后，新增 `src/membership/entitlementLedger.js` 和 `tests/membership-ledger.test.mjs`。这是未接入产品的可运行状态转换：虚构额度发放、任务预占、成功结算、失败释放、重复事件幂等、余额不足拒绝、单进程并发串行化；对无法安全自动撤销的授权要求人工核对。
+- 没有新增依赖，没有接入前端、Functions、KV、账号、订单、真实价格或支付；未创建用户数据。单进程内存执行器不能替代跨进程事务数据库，代码不得用于实际收费。方案状态见 [MEMBERSHIP_PLAN_20261116.md](MEMBERSHIP_PLAN_20261116.md)。
+- 专项 7 项测试通过；全量 lint、测试、构建通过。仅提交源码、测试与交接文档到 `codex/windows-dev`，不碰 `main` 或线上环境。
