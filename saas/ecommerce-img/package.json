@@ -7,6 +7,7 @@
     "dev": "vite",
     "remove-bg-server": "node server/remove-bg-server.cjs",
     "build": "vite build",
+    "build:member-test": "node windows/build-member-test.mjs",
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs",
     "preview": "vite preview",

@@ -11,6 +11,7 @@ lerna-debug.log*
 node_modules
 .venv
 dist
+dist-member-test
 dist-ssr
 release
 *.local

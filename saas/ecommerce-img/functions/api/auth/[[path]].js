@@ -18,6 +18,9 @@ export async function onRequest(context) {
     const deliveryState = { attempted: false, accepted: false }
     const auth = createMemberAuth(context.env, deliveryState)
     const pathname = new URL(context.request.url).pathname
+    if (context.env.MEMBER_EMAIL_ONLY === '1' && pathname.startsWith('/api/auth/phone-number/')) {
+      return Response.json({ error: 'NOT_FOUND' }, { status: 404 })
+    }
     if (ROUTES.get(pathname) !== context.request.method) {
       return Response.json({ error: 'NOT_FOUND' }, { status: 404 })
     }

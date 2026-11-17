@@ -43,3 +43,9 @@ node .\node_modules\vite\bin\vite.js --config .\windows\member-preview.vite.conf
 本机演示不代表 Cloudflare D1、真实邮件/短信投递、生产 Cookies 或账号数据保留策略已通过验收。演示专用提示通过 Vite 开发模式开启，生产构建不包含验证码查看入口。
 
 Windows 桌面另有独立的“TU Scale 会员版”快捷方式，运行 `windows/member-preview-start.ps1`：5184 未运行时启动，再打开会员页；现有“TU Scale”快捷方式仍启动原版。5184 被其他进程占用时脚本会停止并报错，不会结束其他进程。此快捷方式只在当前 Windows 电脑上，不随 Git 提交。
+
+### 独立公网测试包（尚未部署）
+
+`npm run build:member-test` 生成 `dist-member-test`，只供新建的独立 Pages 项目使用。该包关闭手机号入口，移除指向原站的 canonical/OG URL 和站点地图，写入 `robots.txt` 与 `X-Robots-Tag: noindex, nofollow`；不会改变普通 `npm run build` 的 `dist`。服务端还必须设置 `MEMBER_EMAIL_ONLY=1`，否则不能保证手机 API 被关闭。
+
+不要把 5184 的内存 SQLite、模拟发送方或取演示验证码接口部署到公网。独立站点启用真实注册前，须有 Cloudflare 登录授权、独立 Pages 项目与 D1 绑定、有效发送服务及发件身份、服务端 Secret、真实投递与浏览器验收。当前用户选择先仅开放邮箱，暂不接短信；没有自有发信域名，供应商方案仍待确认。新站点不应连接现有生产 Pages 项目或 KV。

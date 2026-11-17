@@ -125,6 +125,14 @@ test('unused Better Auth account routes are unavailable', async () => {
   sqlite.close()
 })
 
+test('email-only test site blocks phone routes before sending SMS', async () => {
+  const { env, sent, sqlite } = await setup({ MEMBER_EMAIL_ONLY: '1' })
+  const result = await call(env, 'phone-number/send-otp', { phoneNumber: '+8613800138000' })
+  assert.equal(result.response.status, 404)
+  assert.equal(sent.length, 0)
+  sqlite.close()
+})
+
 test('global daily budget stops further email sends without claiming success', async () => {
   const { env, sent, sqlite } = await setup({ MEMBER_EMAIL_DAILY_LIMIT: '1' })
   const first = await call(env, 'email-otp/send-verification-otp', { email: 'one@example.test', type: 'sign-in' })

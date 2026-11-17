@@ -3,6 +3,7 @@ import { ArrowLeft, Loader2, Mail, Phone } from 'lucide-react'
 import { getMemberErrorMessage, memberRequest } from './memberApi'
 
 const LOCAL_PREVIEW = import.meta.env.DEV && import.meta.env.VITE_MEMBER_PREVIEW === '1'
+const EMAIL_ONLY = import.meta.env.VITE_MEMBER_EMAIL_ONLY === '1'
 
 export default function MemberPage({ navigate }) {
   const [member, setMember] = useState(null)
@@ -116,7 +117,7 @@ export default function MemberPage({ navigate }) {
     <main className="mx-auto max-w-3xl space-y-5 px-4 py-8">
       <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
         <h1 className="text-xl font-bold">会员账号</h1>
-        <p className="mt-2 text-sm leading-6 text-gray-600">邮箱验证码可用于注册或登录；登录后可验证并绑定手机号。现有免费图片工具继续无需登录，图片仍在浏览器本地处理。</p>
+        <p className="mt-2 text-sm leading-6 text-gray-600">邮箱验证码可用于注册或登录；{EMAIL_ONLY ? '手机号绑定将在后续开放。' : '登录后可验证并绑定手机号。'}现有免费图片工具继续无需登录，图片仍在浏览器本地处理。</p>
       </section>
 
       {LOCAL_PREVIEW && <div role="note" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
@@ -148,10 +149,10 @@ export default function MemberPage({ navigate }) {
 
       {!loading && !unavailable && member && <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><h2 className="text-lg font-semibold">账号信息</h2><p className="mt-2 text-sm text-gray-600">邮箱：{member.emailMasked || '未绑定'}</p><p className="mt-1 text-sm text-gray-600">手机号：{member.phoneMasked || '未绑定'}</p></div>
+          <div><h2 className="text-lg font-semibold">账号信息</h2><p className="mt-2 text-sm text-gray-600">邮箱：{member.emailMasked || '未绑定'}</p><p className="mt-1 text-sm text-gray-600">手机号：{EMAIL_ONLY ? '暂未开放' : member.phoneMasked || '未绑定'}</p></div>
           <button type="button" onClick={logout} disabled={busy} className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 disabled:opacity-50">退出登录</button>
         </div>
-        {!member.phoneMasked && <div className="mt-6 border-t border-gray-100 pt-5">
+        {!EMAIL_ONLY && !member.phoneMasked && <div className="mt-6 border-t border-gray-100 pt-5">
           <h3 className="flex items-center gap-2 font-semibold"><Phone className="h-5 w-5 text-indigo-600" />绑定手机号</h3>
           <form onSubmit={requestPhoneCode} className="mt-4 space-y-3">
             <label htmlFor="member-phone" className="block text-sm font-medium">手机号（含国家区号）</label>
