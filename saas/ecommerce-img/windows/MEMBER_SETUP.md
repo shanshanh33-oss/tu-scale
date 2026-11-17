@@ -1,6 +1,6 @@
 # Better Auth 会员账号（开发分支）
 
-状态：代码与本地模拟 D1 测试已完成；**没有配置线上 D1、邮件、短信或生产密钥，也没有部署**。当前 `/member` 页面在缺少配置时显示“尚未启用”。免费图片工具继续匿名可用。
+状态：代码与本地模拟 D1 测试已完成；独立 Cloudflare 测试项目和空 D1 已创建并建表，**尚未配置 SendGrid 发件人/API Key，也没有首次部署或真实投递**。当前 `/member` 页面在缺少配置时显示“尚未启用”。免费图片工具继续匿名可用。
 
 ## 代码与功能
 
@@ -17,7 +17,7 @@
 1. 创建独立 D1 数据库，将其绑定名设为 `MEMBER_DB`；在隔离环境应用 `migrations/0001_members.sql`，复核表和索引。
 2. 设置 `MEMBER_AUTH_URL` 为实际站点的单一 origin（例如 `https://example.com`，不带结尾 `/`）；设置至少 32 字符的高熵 `MEMBER_AUTH_SECRET`，只放服务端 Secret。页面与 Functions 必须同源。
 3. 设置正整数 `MEMBER_EMAIL_DAILY_LIMIT`、`MEMBER_SMS_DAILY_LIMIT`；数据库限流另设每分钟最多 20 次请求。预算按 UTC 日期记账，发送服务失败仍占用名额，以控制重试成本。
-4. 提供 `MEMBER_DELIVERY` Worker service binding。它接收 POST JSON `{kind, contact, code}`，`kind` 为 `email` 或 `phone`；仅在邮件或短信服务**接受发送**时返回 2xx，其余返回非 2xx。验证码只在服务端传递，禁止记入日志或前端。这里没有选择服务商，也没有接入实际密钥。
+4. 一般模式可提供 `MEMBER_DELIVERY` Worker service binding。它接收 POST JSON `{kind, contact, code}`，`kind` 为 `email` 或 `phone`；仅在发送服务**接受发送**时返回 2xx。独立邮箱测试项目设置 `MEMBER_EMAIL_ONLY=1`，改用 SendGrid Mail Send API：需 Cloudflare Secret `SENDGRID_API_KEY` 和已验证的 `MEMBER_FROM_EMAIL`，只将邮箱和一次性验证码发送给 SendGrid。HTTP 202 才视为接受。短信端点在该项目返回 404。验证码不得进入日志、前端构建或 Git。
 5. Pages Functions 运行环境要支持 Node 兼容 API（`nodejs_compat`），并用对应的兼容日期测试。当前只做了本地 Wrangler 打包，尚未配置任何 Pages 项目。
 
 ## 数据与后续门槛
@@ -48,4 +48,4 @@ Windows 桌面另有独立的“TU Scale 会员版”快捷方式，运行 `wind
 
 `npm run build:member-test` 生成 `dist-member-test`，只供新建的独立 Pages 项目使用。该包关闭手机号入口，移除指向原站的 canonical/OG URL 和站点地图，写入 `robots.txt` 与 `X-Robots-Tag: noindex, nofollow`；不会改变普通 `npm run build` 的 `dist`。服务端还必须设置 `MEMBER_EMAIL_ONLY=1`，否则不能保证手机 API 被关闭。
 
-不要把 5184 的内存 SQLite、模拟发送方或取演示验证码接口部署到公网。独立站点启用真实注册前，须有 Cloudflare 登录授权、独立 Pages 项目与 D1 绑定、有效发送服务及发件身份、服务端 Secret、真实投递与浏览器验收。当前用户选择先仅开放邮箱，暂不接短信；没有自有发信域名，供应商方案仍待确认。新站点不应连接现有生产 Pages 项目或 KV。
+不要把 5184 的内存 SQLite、模拟发送方或取演示验证码接口部署到公网。独立站点 `tu-scale-member-test.pages.dev` 与 D1 `tu-scale-member-test` 已在正确 Cloudflare 账号创建；迁移 SQL 已应用于新库，`MEMBER_AUTH_SECRET` 已存为该 Pages 项目的 Secret。`wrangler.member-test.jsonc` 只绑定新库，不绑定现有 KV。用户选择先仅开放邮箱，暂不接短信，并同意 SendGrid 单发件人方案。真实注册开放前，用户仍须完成 SendGrid 单发件人验证并把受限 Mail Send API Key 安全存入新 Pages 项目，之后进行真实投递和浏览器验收。没有自有发信域名，单发件人仅适合小范围测试，投递可能不稳定。

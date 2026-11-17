@@ -149,3 +149,9 @@
 - 用户选择独立 `*.pages.dev`，先仅开放真实邮箱注册，短信后续接入；当前没有自有发信域名。Cloudflare Wrangler 本机未登录；本轮两次本机回调及一次设备码授权均超时，未创建云资源或部署。重试设备授权时应在用户确认可立即操作后生成新码，不能沿用过期码。
 - 新增 `npm run build:member-test` 生成独立 `dist-member-test`，与普通 `dist` 分开。会员测试包不含本地模拟验证码入口和手机号表单，移除旧站 canonical/OG URL 与 sitemap，写入 noindex/robots 阻止收录。服务端 `MEMBER_EMAIL_ONLY=1` 时禁止手机路由，测试覆盖无短信发送。普通构建不变。
 - 本轮 lint、113 项测试、普通构建及会员测试构建通过；检查测试包无本地演示入口、无手机 UI，存在 noindex 头和 robots 禁止抓取。真实邮件供应商、发件身份验证、Cloudflare D1、独立 Pages 项目、站点 Secret 和在线验收仍未完成。切勿把当前包误称可供朋友真实注册。
+
+## 2026-11-18 独立 Cloudflare 项目与邮件适配
+
+- 用户在 Gmail 的 Cloudflare 通知中确认原站账号线索；Wrangler 设备授权后核对登录邮箱为 `shanshanh33@gmail.com`，Pages 项目列表包含原站 `tu-scale`。没有改动原站。
+- 在同一账号新建 `tu-scale-member-test` Pages 项目（独立 `*.pages.dev`，Direct Upload）及同名 D1 数据库。D1 ID 仅在 `wrangler.member-test.jsonc` 中作资源绑定，不是密钥。新库迁移 9 条 SQL 成功，未写入用户账号。为新 Pages 项目生成独立随机 `MEMBER_AUTH_SECRET`，仅存于 Cloudflare Secret，未在日志或仓库输出。
+- 用户选择邮箱先上线、短信后续接入，并同意 SendGrid 单发件人做小范围测试。服务端新增 SendGrid Mail Send 适配器，仅在测试站 `MEMBER_EMAIL_ONLY=1` 且配置受限 API Key 与已验证发件人时启用；未配置则认证接口 503。短信接口返回 404。当前没有 SendGrid Key、真实发件验证或邮件投递，**不要向朋友宣称站点可注册**。

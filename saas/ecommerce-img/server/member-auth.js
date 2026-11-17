@@ -1,5 +1,6 @@
 import { betterAuth } from 'better-auth'
 import { emailOTP, phoneNumber } from 'better-auth/plugins'
+import { createSendGridDelivery } from './member-sendgrid.js'
 
 const DELIVERY_URL = 'https://member-delivery.internal/send'
 
@@ -11,7 +12,7 @@ function dailyLimit(env, kind) {
   return limit
 }
 
-async function sendCode(env, kind, contact, code, deliveryState) {
+async function sendCode(env, delivery, kind, contact, code, deliveryState) {
   deliveryState.attempted = true
   const day = new Date().toISOString().slice(0, 10)
   const limit = dailyLimit(env, kind)
@@ -21,7 +22,7 @@ async function sendCode(env, kind, contact, code, deliveryState) {
   if (!reserved) return
 
   try {
-    const response = await env.MEMBER_DELIVERY.fetch(new Request(DELIVERY_URL, {
+    const response = await delivery.fetch(new Request(DELIVERY_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, contact, code }),
@@ -34,8 +35,9 @@ async function sendCode(env, kind, contact, code, deliveryState) {
 
 export function createMemberAuth(env, deliveryState = { attempted: false, accepted: false }) {
   const origin = env.MEMBER_AUTH_URL
+  const delivery = env.MEMBER_DELIVERY || (env.MEMBER_EMAIL_ONLY === '1' ? createSendGridDelivery(env) : null)
   if (!env.MEMBER_DB || typeof env.MEMBER_DB.prepare !== 'function'
-    || !env.MEMBER_DELIVERY || typeof env.MEMBER_DELIVERY.fetch !== 'function'
+    || !delivery || typeof delivery.fetch !== 'function'
     || typeof env.MEMBER_AUTH_SECRET !== 'string' || env.MEMBER_AUTH_SECRET.length < 32
     || typeof origin !== 'string' || !/^https?:\/\/[^/]+$/.test(origin)) {
     throw new MemberConfigError('Member authentication is not configured')
@@ -60,7 +62,7 @@ export function createMemberAuth(env, deliveryState = { attempted: false, accept
         storeOTP: 'hashed',
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== 'sign-in') throw new Error('Unsupported email code type')
-          await sendCode(env, 'email', email, otp, deliveryState)
+          await sendCode(env, delivery, 'email', email, otp, deliveryState)
         },
       }),
       phoneNumber({
@@ -69,7 +71,7 @@ export function createMemberAuth(env, deliveryState = { attempted: false, accept
         allowedAttempts: 5,
         phoneNumberValidator: phone => /^\+[1-9]\d{7,14}$/.test(phone),
         async sendOTP({ phoneNumber: phone, code }) {
-          await sendCode(env, 'phone', phone, code, deliveryState)
+          await sendCode(env, delivery, 'phone', phone, code, deliveryState)
         },
       }),
     ],

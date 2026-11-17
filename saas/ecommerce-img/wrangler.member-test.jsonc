@@ -1,0 +1,19 @@
+{
+  "name": "tu-scale-member-test",
+  "pages_build_output_dir": "./dist-member-test",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "MEMBER_DB",
+      "database_name": "tu-scale-member-test",
+      "database_id": "1c4ac7a8-60e1-4a69-83c3-c054d6354447"
+    }
+  ],
+  "vars": {
+    "MEMBER_AUTH_URL": "https://tu-scale-member-test.pages.dev",
+    "MEMBER_EMAIL_ONLY": "1",
+    "MEMBER_EMAIL_DAILY_LIMIT": "50",
+    "MEMBER_SMS_DAILY_LIMIT": "1"
+  }
+}
