@@ -155,3 +155,5 @@
 - 用户在 Gmail 的 Cloudflare 通知中确认原站账号线索；Wrangler 设备授权后核对登录邮箱为 `shanshanh33@gmail.com`，Pages 项目列表包含原站 `tu-scale`。没有改动原站。
 - 在同一账号新建 `tu-scale-member-test` Pages 项目（独立 `*.pages.dev`，Direct Upload）及同名 D1 数据库。D1 ID 仅在 `wrangler.member-test.jsonc` 中作资源绑定，不是密钥。新库迁移 9 条 SQL 成功，未写入用户账号。为新 Pages 项目生成独立随机 `MEMBER_AUTH_SECRET`，仅存于 Cloudflare Secret，未在日志或仓库输出。
 - 用户选择邮箱先上线、短信后续接入，并同意 SendGrid 单发件人做小范围测试。服务端新增 SendGrid Mail Send 适配器，仅在测试站 `MEMBER_EMAIL_ONLY=1` 且配置受限 API Key 与已验证发件人时启用；未配置则认证接口 503。短信接口返回 404。当前没有 SendGrid Key、真实发件验证或邮件投递，**不要向朋友宣称站点可注册**。
+- 新站首次 Direct Upload 已完成：`https://tu-scale-member-test.pages.dev/` 与 `/member` 均 HTTP 200 且 `X-Robots-Tag: noindex, nofollow`；认证会话接口因缺少 SendGrid 配置返回 HTTP 503，符合关闭策略。默认配置 `wrangler.member-test.jsonc` 绑定新库和测试 URL。Wrangler Pages 不接受自定义配置路径；部署时临时复制为根目录 `wrangler.jsonc`，部署后已移除，Git 工作区干净。原 `tu-scale.pages.dev` 项目未改。
+- 会员测试页新增邮箱/会话数据去向说明。下一步用户须在 SendGrid 验证单个发件人并创建仅有 Mail Send 权限的 API Key；密钥只录入新 Pages 项目的 Secret（不发聊天、不入 Git），配置发件地址后重新部署并做真实邮件注册/退出测试，才能把链接发给朋友。

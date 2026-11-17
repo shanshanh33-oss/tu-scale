@@ -1,6 +1,6 @@
 # Better Auth 会员账号（开发分支）
 
-状态：代码与本地模拟 D1 测试已完成；独立 Cloudflare 测试项目和空 D1 已创建并建表，**尚未配置 SendGrid 发件人/API Key，也没有首次部署或真实投递**。当前 `/member` 页面在缺少配置时显示“尚未启用”。免费图片工具继续匿名可用。
+状态：代码与本地模拟 D1 测试已完成；独立 Cloudflare 测试项目已部署，空 D1 已创建并建表，**尚未配置 SendGrid 发件人/API Key，也没有真实投递**。当前 `/member` 页面在缺少配置时显示“尚未启用”。免费图片工具继续匿名可用。
 
 ## 代码与功能
 
@@ -48,4 +48,6 @@ Windows 桌面另有独立的“TU Scale 会员版”快捷方式，运行 `wind
 
 `npm run build:member-test` 生成 `dist-member-test`，只供新建的独立 Pages 项目使用。该包关闭手机号入口，移除指向原站的 canonical/OG URL 和站点地图，写入 `robots.txt` 与 `X-Robots-Tag: noindex, nofollow`；不会改变普通 `npm run build` 的 `dist`。服务端还必须设置 `MEMBER_EMAIL_ONLY=1`，否则不能保证手机 API 被关闭。
 
-不要把 5184 的内存 SQLite、模拟发送方或取演示验证码接口部署到公网。独立站点 `tu-scale-member-test.pages.dev` 与 D1 `tu-scale-member-test` 已在正确 Cloudflare 账号创建；迁移 SQL 已应用于新库，`MEMBER_AUTH_SECRET` 已存为该 Pages 项目的 Secret。`wrangler.member-test.jsonc` 只绑定新库，不绑定现有 KV。用户选择先仅开放邮箱，暂不接短信，并同意 SendGrid 单发件人方案。真实注册开放前，用户仍须完成 SendGrid 单发件人验证并把受限 Mail Send API Key 安全存入新 Pages 项目，之后进行真实投递和浏览器验收。没有自有发信域名，单发件人仅适合小范围测试，投递可能不稳定。
+不要把 5184 的内存 SQLite、模拟发送方或取演示验证码接口部署到公网。独立站点 `tu-scale-member-test.pages.dev` 与 D1 `tu-scale-member-test` 已在正确 Cloudflare 账号创建；迁移 SQL 已应用于新库，`MEMBER_AUTH_SECRET` 已存为该 Pages 项目的 Secret。`wrangler.member-test.jsonc` 只绑定新库，不绑定现有 KV。项目采用 Direct Upload，源码仍推送 GitHub 的 `codex/windows-dev`，但云端更新需手动从该分支构建上传。用户选择先仅开放邮箱，暂不接短信，并同意 SendGrid 单发件人方案。真实注册开放前，用户仍须完成 SendGrid 单发件人验证并把受限 Mail Send API Key 安全存入新 Pages 项目，之后进行真实投递和浏览器验收。没有自有发信域名，单发件人仅适合小范围测试，投递可能不稳定。
+
+首次部署检查：新站 `/`、`/member` 均 HTTP 200，响应头带 `X-Robots-Tag: noindex, nofollow`；`/api/auth/get-session` 在缺少邮件配置时 HTTP 503，符合关闭策略。原站 `tu-scale.pages.dev` 未改。部署时 Wrangler Pages 不接受 `--config` 指定非默认文件名；需在工作区临时复制 `wrangler.member-test.jsonc` 为 `wrangler.jsonc`，完成后移除该临时副本并确认 Git 状态。

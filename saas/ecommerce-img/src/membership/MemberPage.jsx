@@ -118,6 +118,7 @@ export default function MemberPage({ navigate }) {
       <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
         <h1 className="text-xl font-bold">会员账号</h1>
         <p className="mt-2 text-sm leading-6 text-gray-600">邮箱验证码可用于注册或登录；{EMAIL_ONLY ? '手机号绑定将在后续开放。' : '登录后可验证并绑定手机号。'}现有免费图片工具继续无需登录，图片仍在浏览器本地处理。</p>
+        {EMAIL_ONLY && <p className="mt-3 text-sm leading-6 text-gray-600">这是邀请测试站。注册时邮箱和会话信息保存在 Cloudflare D1 北美区域，验证码邮件由 SendGrid 处理；请仅使用自己的邮箱参与测试。图片仍在浏览器本地处理。</p>}
       </section>
 
       {LOCAL_PREVIEW && <div role="note" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
