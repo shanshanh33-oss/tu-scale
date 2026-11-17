@@ -29,3 +29,15 @@
 ## 本地验证
 
 `npm run lint`、`npm test`、`npm run build`；本地 Pages Functions 可用官方 Wrangler `pages functions build functions --compatibility-date 2026-11-16 --compatibility-flags nodejs_compat` 打包。真实注册必须使用经批准的 D1 和发送服务进行预发布环境验收，当前模拟测试不代表邮件或短信实际投递成功。
+
+### 本机交互演示
+
+在 `saas/ecommerce-img` 目录运行：
+
+```powershell
+node .\node_modules\vite\bin\vite.js --config .\windows\member-preview.vite.config.js --host 127.0.0.1 --port 5184 --strictPort
+```
+
+打开 `http://127.0.0.1:5184/member`。这个入口加载与 5174 相同的 TU Scale 页面，但通过本地专用 Vite 配置将会员接口接到内存 SQLite 模拟 D1。它只监听回环地址，不改变现有 5174 或 5179 服务；重启即清空测试账号。使用预填的 `demo@example.test` 和 `+8613800138000`，点击发送验证码后点击“填入演示验证码”，即可操作注册、手机绑定和退出。验证码只用于这两个虚构联系方式，不会发送真实邮件或短信，也不写入日志或磁盘。终端按 Ctrl+C 停止该演示服务。
+
+本机演示不代表 Cloudflare D1、真实邮件/短信投递、生产 Cookies 或账号数据保留策略已通过验收。演示专用提示通过 Vite 开发模式开启，生产构建不包含验证码查看入口。

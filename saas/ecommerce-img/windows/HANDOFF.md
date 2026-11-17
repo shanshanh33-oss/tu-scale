@@ -135,3 +135,9 @@
 - D1 schema 从当前 Better Auth 配置生成，并通过库的迁移检测确认无差异。`tests/member-auth.test.mjs` 覆盖注册、绑手机、退出、越权、发送失败及预算；`tests/member-api.test.mjs` 覆盖前端映射。官方 Wrangler 4.163.0 在本机用 `nodejs_compat` 成功打包 Pages Functions，未部署。
 - 5174 的 Vite 本地服务会对不存在的 `/api/auth/*` 返回 HTTP 200 的 HTML 回退页；前端现将非 JSON 响应视作服务未启用，不会误报验证码已发送。只启动 Vite 不等于启动会员后端。
 - 启用前的配置、个人信息处理、清理和腾讯云迁移前置条件见 [MEMBER_SETUP.md](MEMBER_SETUP.md)。账号删除/数据保留、供应商选择、真实投递及预发布浏览器验收仍需完成。没有订单、支付、会员价格或权益启用。
+
+## 2026-11-17 本机会员交互演示
+
+- 用户希望在现有 TU Scale 本地页面查看完整会员流程。新增 `windows/member-preview.vite.config.js`，在 5184 加载同一 React/Vite 应用，并把 `/api/auth/*` 接到内存 SQLite 模拟 D1 和只接受虚构联系方式的模拟发送方。5174 网页及 5179 AI 服务保持运行，没有触碰真实 D1、邮件、短信、生产配置或 `main`。
+- `/member` 在演示模式显示测试说明、预填邮箱/手机号和“填入演示验证码”按钮；该入口只在 Vite 开发模式启用。演示仅允许 `demo@example.test` 和 `+8613800138000`，重启后测试账号清空。启动方式和限制见 [MEMBER_SETUP.md](MEMBER_SETUP.md)。
+- 5184 页面及认证接口返回 HTTP 200；通过本机 HTTP 实测邮箱发码与验证、会话、手机发码与绑定、退出及会话失效。浏览器确认演示提示和表单可见。还需以真实服务在预发布环境验收投递和 Cloudflare D1 行为。
