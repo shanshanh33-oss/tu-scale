@@ -41,3 +41,5 @@ node .\node_modules\vite\bin\vite.js --config .\windows\member-preview.vite.conf
 打开 `http://127.0.0.1:5184/member`。这个入口加载与 5174 相同的 TU Scale 页面，但通过本地专用 Vite 配置将会员接口接到内存 SQLite 模拟 D1。它只监听回环地址，不改变现有 5174 或 5179 服务；重启即清空测试账号。使用预填的 `demo@example.test` 和 `+8613800138000`，点击发送验证码后点击“填入演示验证码”，即可操作注册、手机绑定和退出。验证码只用于这两个虚构联系方式，不会发送真实邮件或短信，也不写入日志或磁盘。终端按 Ctrl+C 停止该演示服务。
 
 本机演示不代表 Cloudflare D1、真实邮件/短信投递、生产 Cookies 或账号数据保留策略已通过验收。演示专用提示通过 Vite 开发模式开启，生产构建不包含验证码查看入口。
+
+Windows 桌面另有独立的“TU Scale 会员版”快捷方式，运行 `windows/member-preview-start.ps1`：5184 未运行时启动，再打开会员页；现有“TU Scale”快捷方式仍启动原版。5184 被其他进程占用时脚本会停止并报错，不会结束其他进程。此快捷方式只在当前 Windows 电脑上，不随 Git 提交。
